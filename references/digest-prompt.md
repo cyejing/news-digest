@@ -23,14 +23,16 @@
    uv run <SKILL_DIR>/scripts/run-pipeline.py \
      --defaults <SKILL_DIR>/config/defaults \
      --config <WORKSPACE>/config \
+     --archive-dir <WORKSPACE>/archive/news-digest \
      --hours <RSS_HOURS> \
      --output /tmp/summary.json \
      --verbose --force
    ```
 2. 只读取：
    - `/tmp/summary.json`
-3. 根据 `summary.json` 写 Markdown 摘要
+3. 根据 `summary.json` 写 Markdown摘要
 4. 将 Markdown 保存到 `<WORKSPACE>/archive/news-digest/<DATE>/markdown/`
+5. 不要并发运行多个摘要任务；`/tmp/summary.json` 是固定路径，并发运行会互相覆盖
 
 ## 写作规则
 
@@ -46,12 +48,13 @@
 
 ## 输出与归档
 
-- 最终只输出 Markdown 摘要
+- 最终只输出 Markdown摘要
+- 聊天窗口中也要输出完整 Markdown，不要只给简版摘要或只写几条精选
+- 聊天输出应与归档文件内容保持一致；如果平台单条消息长度受限，可分多段连续发送，但不要省略 topic 或条目
 - 将 Markdown 保存到 `<WORKSPACE>/archive/news-digest/<DATE>/markdown/<MODE>.md`
 - 如果同名文件已存在，改为 `<MODE>1.md`、`<MODE>2.md`
 
 ## 禁止事项
 
-- 不要直接读取运行目录中的内部 JSON 中间文件
-- 不要编写临时 Python 去解析内部 JSON
+- 不要直接读取内部中间 JSON，也不要编写临时 Python 去重新解析它们
 - 不要复制或改写脚本流程

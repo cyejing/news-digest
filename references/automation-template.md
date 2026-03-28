@@ -12,7 +12,6 @@
 
 - MODE = daily
 - RSS_HOURS = 48
-- ITEMS_PER_SECTION = 3-5
 - EXTRA_SECTIONS = (无)
 - WORKSPACE = <你的工作区路径>
 - SKILL_DIR = <你的 skill 安装路径>
@@ -27,7 +26,6 @@
 
 - MODE = weekly
 - RSS_HOURS = 168
-- ITEMS_PER_SECTION = 10-15
 - EXTRA_SECTIONS = 📊 每周趋势总结
 - WORKSPACE = <你的工作区路径>
 - SKILL_DIR = <你的 skill 安装路径>

@@ -22,6 +22,8 @@ class TestSourceHealth(unittest.TestCase):
             "overall_status": "ok",
             "total_elapsed_s": 120.0,
             "fetch_elapsed_s": 119.0,
+            "items": 42,
+            "call_stats": {"kind": "steps", "total_calls": 4, "ok_calls": 3, "failed_calls": 0},
             "steps": [
                 {"name": "RSS", "status": "ok"},
                 {"name": "Twitter", "status": "skipped"},
@@ -35,14 +37,16 @@ class TestSourceHealth(unittest.TestCase):
         self.assertEqual(diagnostic["step_key"], "pipeline")
         self.assertEqual(diagnostic["state"], "warn")
         self.assertEqual(diagnostic["details"]["pipeline"]["skipped_steps"], ["Twitter"])
+        self.assertEqual(diagnostic["items"], 42)
 
-    def test_compute_step_state_marks_partial_record_failures_as_warn(self):
+    def test_compute_step_state_marks_partial_call_failures_as_warn(self):
         meta = {
             "step_key": "rss",
             "name": "RSS",
             "status": "ok",
             "elapsed_s": 12.5,
-            "count": 20,
+            "items": 20,
+            "call_stats": {"kind": "sources", "total_calls": 5, "ok_calls": 4, "failed_calls": 1},
             "details": {
                 "record_summary": {
                     "kind": "sources",
@@ -57,6 +61,23 @@ class TestSourceHealth(unittest.TestCase):
 
         self.assertEqual(diagnostic["state"], "warn")
         self.assertEqual(diagnostic["failed_records"], 1)
+        self.assertEqual(diagnostic["call_stats"]["failed_calls"], 1)
+
+    def test_compute_step_state_marks_pending_as_error(self):
+        meta = {
+            "step_key": "twitter",
+            "name": "Twitter",
+            "status": "pending",
+            "elapsed_s": 0,
+            "items": 0,
+            "call_stats": {"kind": "sources", "total_calls": 0, "ok_calls": 0, "failed_calls": 0},
+            "failed_items": [],
+            "details": {},
+        }
+
+        diagnostic = source_health.compute_step_state(meta)
+
+        self.assertEqual(diagnostic["state"], "error")
 
     def test_compute_step_state_captures_merge_details(self):
         meta = {
@@ -64,7 +85,8 @@ class TestSourceHealth(unittest.TestCase):
             "name": "Merge",
             "status": "ok",
             "elapsed_s": 3.2,
-            "count": 90,
+            "items": 90,
+            "call_stats": {"kind": "merge", "total_calls": 1, "ok_calls": 1, "failed_calls": 0},
             "details": {
                 "processing": {"scoring_version": "2.0"},
                 "deduplication": {"input_total": 120, "output_total": 90, "dropped": 30, "drop_ratio": 0.25},
@@ -82,9 +104,10 @@ class TestSourceHealth(unittest.TestCase):
             "name": "Twitter",
             "status": "error",
             "elapsed_s": 3.2,
-            "count": 0,
+            "items": 0,
+            "call_stats": {"kind": "sources", "total_calls": 1, "ok_calls": 0, "failed_calls": 1},
             "failed_items": [{"id": "simon-twitter", "error": "HTTP 429"}],
-            "details": {"record_summary": {"kind": "sources", "total": 1, "ok": 0, "error": 1}},
+            "details": {},
         }
 
         diagnostic = source_health.compute_step_state(meta)
@@ -101,7 +124,8 @@ class TestSourceHealth(unittest.TestCase):
                 "state": "error",
                 "status": "error",
                 "elapsed_s": 10.0,
-                "count": 0,
+                "items": 0,
+                "call_stats": {"kind": "sources", "total_calls": 1, "ok_calls": 0, "failed_calls": 1},
                 "failed_records": 1,
                 "failed_items": [{"id": "simon-twitter", "error": "HTTP 429"}],
                 "observed_ts": now - 100,
@@ -112,7 +136,8 @@ class TestSourceHealth(unittest.TestCase):
                 "state": "ok",
                 "status": "ok",
                 "elapsed_s": 8.0,
-                "count": 10,
+                "items": 10,
+                "call_stats": {"kind": "sources", "total_calls": 1, "ok_calls": 1, "failed_calls": 0},
                 "failed_records": 0,
                 "failed_items": [],
                 "observed_ts": now - 50,
@@ -122,7 +147,7 @@ class TestSourceHealth(unittest.TestCase):
         rows = source_health.build_history_rows(diagnostics, now)
 
         self.assertEqual(rows[0]["latest_issue_summary"], "HTTP 429")
-        self.assertEqual(rows[0]["check_details"][0]["count"], 10)
+        self.assertEqual(rows[0]["check_details"][0]["items"], 10)
         self.assertEqual(rows[0]["check_details"][0]["failed_items"], [])
         self.assertEqual(rows[0]["check_details"][1]["failed_items"], [{"id": "simon-twitter", "error": "HTTP 429"}])
 
@@ -137,7 +162,8 @@ class TestSourceHealth(unittest.TestCase):
                         "name": "RSS",
                         "status": "ok",
                         "elapsed_s": 11.0,
-                        "count": 12,
+                        "items": 12,
+                        "call_stats": {"kind": "sources", "total_calls": 3, "ok_calls": 3, "failed_calls": 0},
                         "details": {
                             "record_summary": {"kind": "sources", "total": 3, "ok": 3, "error": 0}
                         },
@@ -152,7 +178,8 @@ class TestSourceHealth(unittest.TestCase):
                         "name": "Merge",
                         "status": "ok",
                         "elapsed_s": 2.4,
-                        "count": 10,
+                        "items": 10,
+                        "call_stats": {"kind": "merge", "total_calls": 1, "ok_calls": 1, "failed_calls": 0},
                         "details": {
                             "processing": {"scoring_version": "2.0"},
                             "deduplication": {"input_total": 12, "output_total": 10, "dropped": 2, "drop_ratio": 0.167},
@@ -223,7 +250,8 @@ class TestSourceHealth(unittest.TestCase):
                         "name": "RSS",
                         "status": "ok",
                         "elapsed_s": 10.0,
-                        "count": 5,
+                        "items": 5,
+                        "call_stats": {"kind": "sources", "total_calls": 1, "ok_calls": 1, "failed_calls": 0},
                         "details": {"record_summary": {"kind": "sources", "total": 1, "ok": 1, "error": 0}},
                     }
                 ),
@@ -238,6 +266,8 @@ class TestSourceHealth(unittest.TestCase):
                         "overall_status": "error",
                         "total_elapsed_s": 10.0,
                         "fetch_elapsed_s": 9.0,
+                        "items": 1,
+                        "call_stats": {"kind": "steps", "total_calls": 3, "ok_calls": 2, "failed_calls": 1},
                         "steps": [{"name": "Twitter", "status": "error", "stderr_tail": ["HTTP 429"]}],
                         "failed_items": [{"id": "twitter", "error": "HTTP 429"}],
                         "merge": {"status": "ok", "count": 1, "stderr_tail": []},
@@ -257,6 +287,57 @@ class TestSourceHealth(unittest.TestCase):
                 self.assertEqual(source_health.main(), 0)
             finally:
                 source_health.sys.argv = old_argv
+
+    def test_print_history_report_aligns_step_names(self):
+        rows = [
+            {"name": "RSS", "ok": 2, "warn": 0, "error": 0, "degraded_rate": 0.0, "unhealthy": False},
+            {"name": "Google News", "ok": 1, "warn": 1, "error": 0, "degraded_rate": 0.5, "unhealthy": False},
+        ]
+
+        logger = source_health.logging.getLogger("test-history")
+        logger.handlers = []
+        logger.setLevel(source_health.logging.INFO)
+        stream = __import__("io").StringIO()
+        handler = source_health.logging.StreamHandler(stream)
+        logger.addHandler(handler)
+
+        source_health.print_history_report(rows, logger)
+
+        output = stream.getvalue()
+        self.assertIn("✅ RSS         - ok:2 warn:0 error:0", output)
+        self.assertIn("⚠️ Google News - ok:1 warn:1 error:0", output)
+
+    def test_print_run_details_uses_calls_items_and_trimmed_errors(self):
+        diagnostics = [
+            {
+                "run_label": "2026-03-28-2",
+                "step_key": "google",
+                "name": "Google News",
+                "state": "warn",
+                "elapsed_s": 583.1,
+                "items": 192,
+                "call_stats": {"kind": "queries", "total_calls": 11, "ok_calls": 10, "failed_calls": 1},
+                "failed_items": [
+                    {
+                        "id": "ai-models",
+                        "error": "[error] site google/news: Error: Timed out loading Google news results\nReport: very noisy tail",
+                    }
+                ],
+            }
+        ]
+
+        logger = source_health.logging.getLogger("test-run-details")
+        logger.handlers = []
+        logger.setLevel(source_health.logging.INFO)
+        stream = __import__("io").StringIO()
+        handler = source_health.logging.StreamHandler(stream)
+        logger.addHandler(handler)
+
+        source_health.print_run_details(diagnostics, logger)
+
+        output = stream.getvalue()
+        self.assertIn("⚠️ Google News - calls:10/1/11 | items:192 | elapsed:583.1s", output)
+        self.assertIn("ai-models: [error] site google/news: Error: Timed out loading Google news results | Report: very noisy tail", output)
 
 
 if __name__ == "__main__":

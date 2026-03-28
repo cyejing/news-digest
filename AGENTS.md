@@ -8,20 +8,35 @@
 - 最终给大模型的唯一推荐输入是 `/tmp/summary.json`
 - 合并、评分、去重、topic 分组都在 [merge-sources.py](/Users/chenyejing/project/news-digest/scripts/merge-sources.py)
 - 精简摘要 JSON 由 [merge-summarize.py](/Users/chenyejing/project/news-digest/scripts/merge-summarize.py) 生成
-- 当前运行诊断看 `workspace/archive/news-digest/<DATE>/meta/` 中的 `*.meta.json`
-- 最近 7 天历史诊断看 `workspace/archive/news-digest/<DATE>/meta/`
+- 当前运行诊断看 `<WORKSPACE>/archive/news-digest/<DATE>/meta/` 中的 `*.meta.json`
+- 最近 7 天历史诊断看 `<WORKSPACE>/archive/news-digest/` 下最近 7 天的 `<DATE>/meta/`
+- 文档和脚本中的路径语义统一使用 `<SKILL_DIR>` 与 `<WORKSPACE>`，不要依赖当前 shell 的相对路径
+- `run-pipeline.py` 是长耗时脚本；如果运行环境支持 subagent、后台代理或长任务执行，应优先用这种方式运行，并允许和脚本默认 timeout 匹配的执行时间
+- 同一台机器上不要并发运行多个摘要任务；`/tmp/summary.json` 是固定路径，并发运行会互相覆盖
 
 工作区覆盖顺序：
 
-1. `<workspace>/config/news-digest-sources.json`
-2. `<workspace>/config/news-digest-topics.json`
-3. `config/defaults/`
+1. `<WORKSPACE>/config/news-digest-sources.json`
+2. `<WORKSPACE>/config/news-digest-topics.json`
+3. `<SKILL_DIR>/config/defaults/`
 
 归档目录：
 
-- `<workspace>/archive/news-digest/<DATE>/json/`
-- `<workspace>/archive/news-digest/<DATE>/markdown/`
-- `<workspace>/archive/news-digest/<DATE>/meta/`
+- `<WORKSPACE>/archive/news-digest/<DATE>/json/`
+- `<WORKSPACE>/archive/news-digest/<DATE>/markdown/`
+- `<WORKSPACE>/archive/news-digest/<DATE>/meta/`
+
+推荐主命令：
+
+```bash
+uv run <SKILL_DIR>/scripts/run-pipeline.py \
+  --defaults <SKILL_DIR>/config/defaults \
+  --config <WORKSPACE>/config \
+  --archive-dir <WORKSPACE>/archive/news-digest \
+  --hours 48 \
+  --output /tmp/summary.json \
+  --verbose --force
+```
 
 ## Topic 规则
 
@@ -72,6 +87,8 @@ RSS 默认池规则：
 - 默认优先靠 cooldown 主动降频，避免触发限流
 - 新抓取脚本应提供可覆盖的 cooldown 环境变量
 - `run-pipeline.py` 应把 `cooldown_s` 写入 `pipeline.meta.json`
+- 新 fetch 步骤无论成功、返回非 0、超时或结果文件缺失，都应保证输出对应的 `*.meta.json`
+- step meta 的失败诊断统一使用 `failed_items`；不要再维护单独的 `error_messages` 作为主失败来源
 - 除非确认目标站点稳定支持更高频率，否则不要加并发
 
 ## 诊断入口
@@ -79,42 +96,46 @@ RSS 默认池规则：
 配置检查：
 
 ```bash
-uv run scripts/validate-config.py --verbose
+uv run <SKILL_DIR>/scripts/validate-config.py --defaults <SKILL_DIR>/config/defaults --config <WORKSPACE>/config --verbose
 ```
 
 当前运行诊断：
 
 ```bash
-uv run scripts/source-health.py --input-dir workspace/archive/news-digest/<DATE> --verbose
+uv run <SKILL_DIR>/scripts/source-health.py --input-dir <WORKSPACE>/archive/news-digest/<DATE>/meta --verbose
 ```
 
 最近 7 天历史诊断：
 
 ```bash
-uv run scripts/source-health.py --input-dir workspace/archive/news-digest --verbose
+uv run <SKILL_DIR>/scripts/source-health.py --input-dir <WORKSPACE>/archive/news-digest --verbose
 ```
 
 说明：
 
 - `run-pipeline.py` 会在 debug 目录下写每个步骤的 `.meta.json`
-- `run-pipeline.py` 也会把 `summary.json` 和 `meta/` 归档到 `workspace/archive/news-digest/<DATE>/`
-- `source-health.py` 统一使用 `--input-dir`；如果传入 archive 根目录，会自动聚合最近 7 天 `<DATE>/meta/` 下的元数据
+- `run-pipeline.py` 也会把 `summary.json` 和 `meta/` 归档到 `<WORKSPACE>/archive/news-digest/<DATE>/`
+- `source-health.py` 只读取 meta，不再回读原始结果 JSON
+- 如果 `--input-dir` 指向 archive 根目录，`source-health.py` 会自动聚合最近 7 天 `<DATE>/meta/` 下的元数据
+- `source-health.py` 的报告结构固定为：
+  - `History report`：步骤级汇总，不展开详细错误
+  - `Run details`：按每次运行分组，详细显示 `failed_items`
 
 ## 测试入口
 
 统一使用 [test-news-digest.sh](/Users/chenyejing/project/news-digest/scripts/test-news-digest.sh)。测试输出固定在 `/tmp/news-digest/`。
 
 ```bash
-uv run scripts/test-news-digest.sh full
-uv run scripts/test-news-digest.sh step rss
-uv run scripts/test-news-digest.sh step merge
-uv run scripts/test-news-digest.sh step summarize
-uv run scripts/test-news-digest.sh health
-uv run scripts/test-news-digest.sh unit
+uv run <SKILL_DIR>/scripts/test-news-digest.sh full
+uv run <SKILL_DIR>/scripts/test-news-digest.sh step rss
+uv run <SKILL_DIR>/scripts/test-news-digest.sh step merge
+uv run <SKILL_DIR>/scripts/test-news-digest.sh step summarize
+uv run <SKILL_DIR>/scripts/test-news-digest.sh health
+uv run <SKILL_DIR>/scripts/test-news-digest.sh unit
 ```
 
 补充：
 
-- `full` 会产出 `/tmp/news-digest/summary.json`，并把步骤诊断元数据归档到 `workspace/archive/news-digest/<DATE>/meta/`
+- `full` 会产出 `/tmp/news-digest/summary.json`，并把步骤诊断元数据归档到 `<WORKSPACE>/archive/news-digest/<DATE>/meta/`
 - 单步骤测试复用 `/tmp/news-digest/` 下固定文件名
-- 历史去重默认读取 `workspace/archive/news-digest/` 下所有日期目录中的 `json/`
+- 历史去重默认读取 `<WORKSPACE>/archive/news-digest/` 下所有日期目录中的 `json/`

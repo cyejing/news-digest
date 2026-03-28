@@ -7,19 +7,20 @@ then renders a compact summary JSON for downstream prompt-writing flows.
 """
 
 import argparse
-import shutil
 import json
 import logging
 import os
+import shutil
 import signal
 import subprocess
 import sys
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 SCRIPTS_DIR = Path(__file__).parent
 DEFAULT_TIMEOUT = 2000
@@ -27,6 +28,7 @@ MERGE_TIMEOUT = 300
 SUMMARY_TIMEOUT = 120
 DEFAULT_SUMMARY_TOP = 5
 ARCHIVE_RETENTION_DAYS = 90
+ERROR_TEXT_LIMIT = 180
 STEP_COOLDOWN_DEFAULTS = {
     "fetch-twitter.py": ("BB_BROWSER_TWITTER_COOLDOWN_SECONDS", 8.0),
     "fetch-reddit.py": ("BB_BROWSER_REDDIT_COOLDOWN_SECONDS", 6.0),
@@ -37,15 +39,35 @@ STEP_COOLDOWN_DEFAULTS = {
 }
 
 
-def load_json_file(path: Optional[Path]) -> Optional[Dict[str, Any]]:
-    if not path or not path.exists():
-        return None
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            data = json.load(handle)
-        return data if isinstance(data, dict) else None
-    except (OSError, json.JSONDecodeError):
-        return None
+@dataclass(frozen=True)
+class StepSpec:
+    step_key: str
+    name: str
+    script: str
+    args: List[str]
+    output_path: Optional[Path]
+    cooldown_s: Optional[float] = None
+
+
+@dataclass
+class ProcessResult:
+    step_key: str
+    name: str
+    status: str
+    elapsed_s: float
+    effective_timeout_s: int
+    cooldown_s: Optional[float]
+    stderr_tail: List[str] = field(default_factory=list)
+    stdout_tail: List[str] = field(default_factory=list)
+
+
+@dataclass
+class StepMeta:
+    status: str
+    items: int
+    call_stats: Dict[str, Any]
+    failed_items: List[Dict[str, str]]
+    details: Dict[str, Any]
 
 
 def setup_logging(verbose: bool) -> logging.Logger:
@@ -58,104 +80,34 @@ def setup_logging(verbose: bool) -> logging.Logger:
     return logging.getLogger(__name__)
 
 
-def count_output_items(output_path: Path) -> int:
-    if not output_path.exists() or output_path.suffix != ".json":
-        return 0
+def write_json(path: Path, payload: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+
+
+def load_json_file(path: Optional[Path]) -> Optional[Dict[str, Any]]:
+    if not path or not path.exists():
+        return None
     try:
-        with open(output_path, "r", encoding="utf-8") as handle:
-            data = json.load(handle)
-    except (json.JSONDecodeError, OSError):
-        return 0
-    return (
-        data.get("total_articles")
-        or data.get("total_posts")
-        or data.get("total_releases")
-        or data.get("total_results")
-        or data.get("total")
-        or data.get("output_stats", {}).get("total_articles")
-        or 0
-    )
+        with open(path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        return payload if isinstance(payload, dict) else None
+    except (OSError, json.JSONDecodeError):
+        return None
 
 
-def run_step(
-    name: str,
-    script: str,
-    args_list: list,
-    output_path: Optional[Path],
-    timeout: int = DEFAULT_TIMEOUT,
-    force: bool = False,
-    cooldown_s: Optional[float] = None,
-    output_flag: str = "--output",
-) -> Dict[str, Any]:
-    t0 = time.time()
-    cmd = [sys.executable, str(SCRIPTS_DIR / script)] + args_list
-    if output_path is not None:
-        cmd += [output_flag, str(output_path)]
-    if force:
-        cmd.append("--force")
-
-    try:
-        process = subprocess.Popen(
-            cmd,
-            text=True,
-            env=os.environ,
-            start_new_session=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        try:
-            stdout, stderr = process.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            if os.name != "nt":
-                try:
-                    os.killpg(process.pid, signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
-                try:
-                    stdout, stderr = process.communicate(timeout=5)
-                except subprocess.TimeoutExpired:
-                    try:
-                        os.killpg(process.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                    stdout, stderr = process.communicate()
-            else:
-                process.kill()
-                stdout, stderr = process.communicate()
-            elapsed = time.time() - t0
-            return {
-                "name": name,
-                "status": "timeout",
-                "elapsed_s": round(elapsed, 1),
-                "count": 0,
-                "effective_timeout_s": timeout,
-                "cooldown_s": cooldown_s,
-                "stderr_tail": [f"Killed after {timeout}s"],
-            }
-
-        elapsed = time.time() - t0
-        ok = process.returncode == 0
-        count = count_output_items(output_path) if ok and output_path is not None else 0
-        return {
-            "name": name,
-            "status": "ok" if ok else "error",
-            "elapsed_s": round(elapsed, 1),
-            "count": count,
-            "effective_timeout_s": timeout,
-            "cooldown_s": cooldown_s,
-            "stderr_tail": (stderr or "").strip().split("\n")[-3:] if not ok else [],
-        }
-    except Exception as exc:
-        elapsed = time.time() - t0
-        return {
-            "name": name,
-            "status": "error",
-            "elapsed_s": round(elapsed, 1),
-            "count": 0,
-            "effective_timeout_s": timeout,
-            "cooldown_s": cooldown_s,
-            "stderr_tail": [str(exc)],
-        }
+def normalize_error_text(value: Any, limit: int = ERROR_TEXT_LIMIT) -> str:
+    if value is None:
+        return ""
+    lines = [str(line).strip() for line in str(value).splitlines() if str(line).strip()]
+    if not lines:
+        return ""
+    text = " | ".join(lines[:2])
+    text = " ".join(text.split())
+    if len(text) <= limit:
+        return text
+    return text[: max(limit - 3, 1)].rstrip() + "..."
 
 
 def get_cooldown_for_script(script: str) -> Optional[float]:
@@ -210,7 +162,7 @@ def cleanup_archive_root(archive_root: Path, retention_days: int = ARCHIVE_RETEN
     return removed
 
 
-def archive_run_artifacts(
+def archive_outputs(
     archive_root: Optional[Path],
     summary_output: Path,
     pipeline_meta_output: Path,
@@ -225,7 +177,11 @@ def archive_run_artifacts(
     json_dir.mkdir(parents=True, exist_ok=True)
     meta_dir.mkdir(parents=True, exist_ok=True)
 
-    archived: Dict[str, Any] = {"date_dir": str(today_dir), "json_dir": str(json_dir), "meta_dir": str(meta_dir)}
+    archived: Dict[str, Any] = {
+        "date_dir": str(today_dir),
+        "json_dir": str(json_dir),
+        "meta_dir": str(meta_dir),
+    }
 
     if summary_output.exists():
         archived_summary = resolve_unique_output_path(json_dir / summary_output.name)
@@ -249,7 +205,22 @@ def archive_run_artifacts(
     return archived
 
 
-def summarize_output_payload(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def extract_items_from_payload(payload: Optional[Dict[str, Any]], fallback: int = 0) -> int:
+    if not payload:
+        return int(fallback or 0)
+    return int(
+        payload.get("total_articles")
+        or payload.get("total_posts")
+        or payload.get("total_releases")
+        or payload.get("total_results")
+        or payload.get("total")
+        or payload.get("output_stats", {}).get("total_articles")
+        or fallback
+        or 0
+    )
+
+
+def summarize_payload_details(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if not payload:
         return {}
 
@@ -334,19 +305,64 @@ def summarize_output_payload(payload: Optional[Dict[str, Any]]) -> Dict[str, Any
     return details
 
 
-def collect_failed_items(payload: Optional[Dict[str, Any]], limit: int = 10) -> List[Dict[str, str]]:
+def extract_call_stats(payload: Optional[Dict[str, Any]], *, step_key: str, status: str) -> Dict[str, Any]:
+    def single_call(kind: str) -> Dict[str, Any]:
+        if status in {"pending", "skipped"}:
+            return {"kind": kind, "total_calls": 0, "ok_calls": 0, "failed_calls": 0}
+        ok_calls = 1 if status == "ok" else 0
+        return {"kind": kind, "total_calls": 1, "ok_calls": ok_calls, "failed_calls": 1 - ok_calls}
+
+    if not payload:
+        return single_call(step_key)
+
+    if isinstance(payload.get("sources"), list):
+        entries = [entry for entry in payload["sources"] if isinstance(entry, dict)]
+        ok_calls = sum(1 for entry in entries if entry.get("status") == "ok")
+        return {"kind": "sources", "total_calls": len(entries), "ok_calls": ok_calls, "failed_calls": max(len(entries) - ok_calls, 0)}
+
+    if isinstance(payload.get("subreddits"), list):
+        entries = [entry for entry in payload["subreddits"] if isinstance(entry, dict)]
+        ok_calls = sum(1 for entry in entries if entry.get("status") == "ok")
+        return {"kind": "subreddits", "total_calls": len(entries), "ok_calls": ok_calls, "failed_calls": max(len(entries) - ok_calls, 0)}
+
+    if isinstance(payload.get("topics"), list):
+        entries = [entry for entry in payload["topics"] if isinstance(entry, dict)]
+        query_stats = [
+            stat
+            for entry in entries
+            for stat in entry.get("query_stats", [])
+            if isinstance(stat, dict)
+        ]
+        if query_stats:
+            ok_calls = sum(1 for stat in query_stats if stat.get("status") == "ok")
+            return {"kind": "queries", "total_calls": len(query_stats), "ok_calls": ok_calls, "failed_calls": max(len(query_stats) - ok_calls, 0)}
+        if any("status" in entry for entry in entries):
+            ok_calls = sum(1 for entry in entries if entry.get("status") == "ok")
+            return {"kind": "topics", "total_calls": len(entries), "ok_calls": ok_calls, "failed_calls": max(len(entries) - ok_calls, 0)}
+
+    if isinstance(payload.get("repos"), list):
+        entries = [entry for entry in payload["repos"] if isinstance(entry, dict)]
+        if any("status" in entry for entry in entries):
+            ok_calls = sum(1 for entry in entries if entry.get("status") == "ok")
+            return {"kind": "repos", "total_calls": len(entries), "ok_calls": ok_calls, "failed_calls": max(len(entries) - ok_calls, 0)}
+        return single_call("repos")
+
+    return single_call(step_key)
+
+
+def extract_failed_items(payload: Optional[Dict[str, Any]], limit: int = 10) -> List[Dict[str, str]]:
     if not payload:
         return []
 
     failed_items: List[Dict[str, str]] = []
 
     def append_item(entry_id: Any, error_value: Any) -> None:
-        item_id = str(entry_id).strip()
-        error_text = str(error_value).strip()
-        if not item_id:
-            item_id = "unknown"
+        item_id = str(entry_id).strip() if entry_id is not None else ""
+        error_text = normalize_error_text(error_value)
         if not error_text:
-            error_text = "unknown error"
+            return
+        if not item_id:
+            item_id = "item"
         candidate = {"id": item_id, "error": error_text}
         if candidate not in failed_items:
             failed_items.append(candidate)
@@ -361,9 +377,12 @@ def collect_failed_items(payload: Optional[Dict[str, Any]], limit: int = 10) -> 
             status = entry.get("status")
             explicit_error = entry.get("error")
             error_messages = entry.get("error_messages")
-            has_error = bool(explicit_error) or (isinstance(error_messages, list) and any(str(item).strip() for item in error_messages))
+            has_error = bool(explicit_error) or (
+                isinstance(error_messages, list) and any(str(item).strip() for item in error_messages)
+            )
             if status == "ok" or (status is None and not has_error):
-                continue
+                if key != "topics":
+                    continue
             entry_id = (
                 entry.get("source_id")
                 or entry.get("id")
@@ -371,143 +390,465 @@ def collect_failed_items(payload: Optional[Dict[str, Any]], limit: int = 10) -> 
                 or entry.get("topic")
                 or entry.get("repo")
                 or entry.get("name")
-                or "unknown"
+                or entry.get("query")
+                or entry.get("topic_id")
             )
+            if key == "topics" and isinstance(entry.get("query_stats"), list):
+                topic_query_failures = False
+                for query_stat in entry["query_stats"]:
+                    if not isinstance(query_stat, dict) or query_stat.get("status") == "ok":
+                        continue
+                    topic_query_failures = True
+                    append_item(entry_id or entry.get("topic_id") or entry.get("topic"), query_stat.get("error") or query_stat.get("query"))
+                    if len(failed_items) >= limit:
+                        return failed_items[:limit]
+                if status == "ok" and topic_query_failures:
+                    continue
             if explicit_error:
                 append_item(entry_id, explicit_error)
             elif isinstance(error_messages, list) and error_messages:
-                append_item(entry_id, error_messages[0])
-            else:
-                append_item(entry_id, "unknown error")
+                first_message = next((item for item in error_messages if normalize_error_text(item)), None)
+                append_item(entry_id, first_message)
             if len(failed_items) >= limit:
                 return failed_items[:limit]
 
     return failed_items[:limit]
 
 
-def build_aggregate_failed_items(result: Dict[str, Any], limit: int = 1) -> List[Dict[str, str]]:
-    if result.get("status") not in {"error", "timeout"}:
-        return []
-    stderr_tail = [str(line).strip() for line in result.get("stderr_tail", []) if str(line).strip()]
-    message = stderr_tail[0] if stderr_tail else result.get("status", "error")
-    return [{"id": "__step__", "error": str(message)}][:limit]
+def build_diagnostics(payload: Optional[Dict[str, Any]], process_result: ProcessResult, step_key: str) -> StepMeta:
+    details = summarize_payload_details(payload)
+    items = extract_items_from_payload(payload)
+    call_stats = extract_call_stats(payload, step_key=step_key, status=process_result.status)
+    failed_items = extract_failed_items(payload)
+    if not failed_items and process_result.status in {"error", "timeout"}:
+        message = next((normalize_error_text(line) for line in process_result.stderr_tail if normalize_error_text(line)), process_result.status)
+        failed_items = [{"id": "__step__", "error": message}]
+    return StepMeta(
+        status=process_result.status,
+        items=items,
+        call_stats=call_stats,
+        failed_items=failed_items,
+        details=details,
+    )
 
 
-def write_json(path: Path, payload: Dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, ensure_ascii=False, indent=2)
-
-
-def build_step_meta(
-    *,
-    step_key: str,
-    name: str,
-    script: str,
-    result: Dict[str, Any],
-    output_path: Optional[Path],
-) -> Dict[str, Any]:
-    payload = load_json_file(output_path)
-    failed_items = collect_failed_items(payload)
-    if not failed_items:
-        failed_items = build_aggregate_failed_items(result)
+def serialize_step_meta(spec: StepSpec, process_result: ProcessResult, meta: StepMeta) -> Dict[str, Any]:
     return {
         "meta_version": "1.0",
-        "step_key": step_key,
-        "name": name,
-        "script": script,
-        "status": result.get("status"),
-        "elapsed_s": result.get("elapsed_s"),
-        "count": result.get("count", 0),
-        "effective_timeout_s": result.get("effective_timeout_s"),
-        "cooldown_s": result.get("cooldown_s"),
-        "output_path": str(output_path) if output_path else None,
-        "failed_items": failed_items,
-        "details": summarize_output_payload(payload),
+        "step_key": spec.step_key,
+        "name": spec.name,
+        "script": spec.script,
+        "status": meta.status,
+        "elapsed_s": process_result.elapsed_s,
+        "items": meta.items,
+        "call_stats": meta.call_stats,
+        "effective_timeout_s": process_result.effective_timeout_s,
+        "cooldown_s": process_result.cooldown_s,
+        "output_path": str(spec.output_path) if spec.output_path else None,
+        "failed_items": meta.failed_items,
+        "details": meta.details,
     }
 
 
-def build_pipeline_failed_items(
-    step_results: List[Dict[str, Any]],
-    merge_result: Dict[str, Any],
-    summary_result: Dict[str, Any],
-    limit: int = 20,
-) -> List[Dict[str, str]]:
+def build_step_result(spec: StepSpec, process_result: ProcessResult, meta: StepMeta) -> Dict[str, Any]:
+    return {
+        "step_key": spec.step_key,
+        "name": spec.name,
+        "status": meta.status,
+        "elapsed_s": process_result.elapsed_s,
+        "items": meta.items,
+        "effective_timeout_s": process_result.effective_timeout_s,
+        "cooldown_s": process_result.cooldown_s,
+        "stderr_tail": process_result.stderr_tail,
+    }
+
+
+def make_process_result(
+    *,
+    spec: StepSpec,
+    status: str,
+    timeout: int,
+    elapsed_s: float = 0.0,
+    stderr_tail: Optional[Sequence[str]] = None,
+    stdout_tail: Optional[Sequence[str]] = None,
+) -> ProcessResult:
+    return ProcessResult(
+        step_key=spec.step_key,
+        name=spec.name,
+        status=status,
+        elapsed_s=round(elapsed_s, 1),
+        effective_timeout_s=timeout,
+        cooldown_s=spec.cooldown_s,
+        stderr_tail=[str(line).strip() for line in (stderr_tail or []) if str(line).strip()],
+        stdout_tail=[str(line).strip() for line in (stdout_tail or []) if str(line).strip()],
+    )
+
+
+def resolve_script_path(script: str) -> Path:
+    path = Path(script)
+    if path.is_absolute():
+        return path
+    return SCRIPTS_DIR / script
+
+
+def run_step_process(spec: StepSpec, *, timeout: int, force: bool = False, output_flag: str = "--output") -> ProcessResult:
+    cmd = [sys.executable, str(resolve_script_path(spec.script)), *spec.args]
+    if spec.output_path is not None:
+        cmd += [output_flag, str(spec.output_path)]
+    if force:
+        cmd.append("--force")
+
+    t0 = time.time()
+    try:
+        process = subprocess.Popen(
+            cmd,
+            text=True,
+            env=os.environ,
+            start_new_session=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            if os.name != "nt":
+                try:
+                    os.killpg(process.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                try:
+                    stdout, stderr = process.communicate(timeout=5)
+                except subprocess.TimeoutExpired:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    stdout, stderr = process.communicate()
+            else:
+                process.kill()
+                stdout, stderr = process.communicate()
+            return make_process_result(
+                spec=spec,
+                status="timeout",
+                timeout=timeout,
+                elapsed_s=time.time() - t0,
+                stderr_tail=[f"Killed after {timeout}s"],
+                stdout_tail=(stdout or "").splitlines()[-3:],
+            )
+
+        status = "ok" if process.returncode == 0 else "error"
+        return make_process_result(
+            spec=spec,
+            status=status,
+            timeout=timeout,
+            elapsed_s=time.time() - t0,
+            stderr_tail=(stderr or "").splitlines()[-3:] if status != "ok" else [],
+            stdout_tail=(stdout or "").splitlines()[-3:],
+        )
+    except Exception as exc:
+        return make_process_result(
+            spec=spec,
+            status="error",
+            timeout=timeout,
+            elapsed_s=time.time() - t0,
+            stderr_tail=[str(exc)],
+        )
+
+
+def load_step_payload(output_path: Optional[Path]) -> Optional[Dict[str, Any]]:
+    return load_json_file(output_path)
+
+
+def write_step_meta(debug_dir: Path, spec: StepSpec, process_result: ProcessResult, meta: StepMeta) -> Path:
+    step_meta_path = debug_dir / f"{spec.step_key}.meta.json"
+    write_json(step_meta_path, serialize_step_meta(spec, process_result, meta))
+    return step_meta_path
+
+
+def finalize_step(debug_dir: Path, spec: StepSpec, process_result: ProcessResult) -> Tuple[Dict[str, Any], Path]:
+    payload = load_step_payload(spec.output_path)
+    meta = build_diagnostics(payload, process_result, spec.step_key)
+    step_meta_path = write_step_meta(debug_dir, spec, process_result, meta)
+    return build_step_result(spec, process_result, meta), step_meta_path
+
+
+def build_fetch_steps(
+    *,
+    defaults_dir: Path,
+    config_dir: Optional[Path],
+    hours: int,
+    debug_dir: Path,
+    verbose: bool,
+) -> List[StepSpec]:
+    common = ["--defaults", str(defaults_dir)]
+    if config_dir:
+        common += ["--config", str(config_dir)]
+    common += ["--hours", str(hours)]
+    verbose_flag = ["--verbose"] if verbose else []
+
+    return [
+        StepSpec("rss", "RSS", "fetch-rss.py", common + verbose_flag, debug_dir / "rss.json", None),
+        StepSpec("twitter", "Twitter", "fetch-twitter.py", common + verbose_flag, debug_dir / "twitter.json", get_cooldown_for_script("fetch-twitter.py")),
+        StepSpec("google", "Google News", "fetch-google.py", common + verbose_flag, debug_dir / "google.json", get_cooldown_for_script("fetch-google.py")),
+        StepSpec("github", "GitHub", "fetch-github.py", common + verbose_flag, debug_dir / "github.json", get_cooldown_for_script("fetch-github.py")),
+        StepSpec(
+            "trending",
+            "GitHub Trending",
+            "fetch-github-trending.py",
+            ["--hours", str(hours), "--defaults", str(defaults_dir)] + (["--config", str(config_dir)] if config_dir else []) + verbose_flag,
+            debug_dir / "trending.json",
+            get_cooldown_for_script("fetch-github-trending.py"),
+        ),
+        StepSpec("api", "API Sources", "fetch-api.py", verbose_flag, debug_dir / "api.json", None),
+        StepSpec("v2ex", "V2EX Hot", "fetch-v2ex.py", verbose_flag, debug_dir / "v2ex.json", get_cooldown_for_script("fetch-v2ex.py")),
+        StepSpec("reddit", "Reddit", "fetch-reddit.py", common + verbose_flag, debug_dir / "reddit.json", get_cooldown_for_script("fetch-reddit.py")),
+    ]
+
+
+def log_step_completion(logger: logging.Logger, result: Dict[str, Any]) -> None:
+    status_icon = {"ok": "✅", "error": "❌", "timeout": "⏰", "skipped": "⏭️", "pending": "…"}.get(result["status"], "?")
+    logger.info("  %s %s: %s items (%ss)", status_icon, result["name"], result["items"], result["elapsed_s"])
+    if result["status"] not in {"ok", "skipped"} and result["stderr_tail"]:
+        for line in result["stderr_tail"]:
+            logger.debug("    %s", line)
+
+
+def execute_fetch_steps(
+    *,
+    steps: List[StepSpec],
+    skip_steps: set[str],
+    timeout: int,
+    force: bool,
+    debug_dir: Path,
+    logger: logging.Logger,
+) -> Tuple[List[Dict[str, Any]], Dict[str, str], float]:
+    t_start = time.time()
+    step_results: List[Dict[str, Any]] = []
+    step_meta_paths: Dict[str, str] = {}
+    active_specs: List[StepSpec] = []
+
+    for spec in steps:
+        if spec.step_key in skip_steps:
+            skipped_result = make_process_result(spec=spec, status="skipped", timeout=timeout)
+            result, meta_path = finalize_step(debug_dir, spec, skipped_result)
+            step_results.append(result)
+            step_meta_paths[spec.step_key] = str(meta_path)
+            logger.info("  ⏭️  %s: skipped (--skip)", spec.name)
+            continue
+
+        pending_result = make_process_result(spec=spec, status="pending", timeout=timeout)
+        pending_meta = build_diagnostics(None, pending_result, spec.step_key)
+        meta_path = write_step_meta(debug_dir, spec, pending_result, pending_meta)
+        step_meta_paths[spec.step_key] = str(meta_path)
+        active_specs.append(spec)
+
+    if active_specs:
+        spec_by_future: Dict[Any, StepSpec] = {}
+        with ThreadPoolExecutor(max_workers=len(active_specs)) as pool:
+            for spec in active_specs:
+                future = pool.submit(run_step_process, spec, timeout=timeout, force=force)
+                spec_by_future[future] = spec
+
+            for future in as_completed(spec_by_future):
+                spec = spec_by_future[future]
+                try:
+                    process_result = future.result()
+                except Exception as exc:
+                    logger.exception("❌ %s future crashed", spec.name)
+                    process_result = make_process_result(
+                        spec=spec,
+                        status="error",
+                        timeout=timeout,
+                        stderr_tail=[f"future crashed: {exc}"],
+                    )
+                result, meta_path = finalize_step(debug_dir, spec, process_result)
+                step_results.append(result)
+                step_meta_paths[spec.step_key] = str(meta_path)
+                log_step_completion(logger, result)
+
+    completed = {result["step_key"] for result in step_results}
+    for spec in steps:
+        if spec.step_key in completed:
+            continue
+        fallback = make_process_result(
+            spec=spec,
+            status="error",
+            timeout=timeout,
+            stderr_tail=["step finished without final result"],
+        )
+        result, meta_path = finalize_step(debug_dir, spec, fallback)
+        step_results.append(result)
+        step_meta_paths[spec.step_key] = str(meta_path)
+
+    return step_results, step_meta_paths, time.time() - t_start
+
+
+def build_merge_args(debug_dir: Path, archive_dir: Optional[Path], verbose: bool) -> List[str]:
+    merge_args = ["--verbose"] if verbose else []
+    for flag, path in [
+        ("--rss", debug_dir / "rss.json"),
+        ("--twitter", debug_dir / "twitter.json"),
+        ("--google", debug_dir / "google.json"),
+        ("--github", debug_dir / "github.json"),
+        ("--trending", debug_dir / "trending.json"),
+        ("--api", debug_dir / "api.json"),
+        ("--v2ex", debug_dir / "v2ex.json"),
+        ("--reddit", debug_dir / "reddit.json"),
+    ]:
+        if path.exists():
+            merge_args += [flag, str(path)]
+    if archive_dir:
+        merge_args += ["--archive-dir", str(archive_dir)]
+    return merge_args
+
+
+def run_merge_step(debug_dir: Path, archive_dir: Optional[Path], verbose: bool) -> Tuple[StepSpec, Dict[str, Any], Path]:
+    spec = StepSpec("merge", "Merge", "merge-sources.py", build_merge_args(debug_dir, archive_dir, verbose), debug_dir / "merged.json", None)
+    process_result = run_step_process(spec, timeout=MERGE_TIMEOUT, force=False)
+    result, meta_path = finalize_step(debug_dir, spec, process_result)
+    return spec, result, meta_path
+
+
+def run_summary_step(debug_dir: Path, summary_output: Path, summary_top: int) -> Tuple[StepSpec, Dict[str, Any], Path]:
+    spec = StepSpec(
+        "summarize",
+        "Summarize",
+        "merge-summarize.py",
+        ["--input", str(debug_dir / "merged.json"), "--top", str(summary_top)],
+        summary_output,
+        None,
+    )
+    if not (debug_dir / "merged.json").exists():
+        process_result = make_process_result(spec=spec, status="skipped", timeout=SUMMARY_TIMEOUT)
+    else:
+        process_result = run_step_process(spec, timeout=SUMMARY_TIMEOUT, force=False)
+    result, meta_path = finalize_step(debug_dir, spec, process_result)
+    return spec, result, meta_path
+
+
+def build_pipeline_failed_items(step_results: List[Dict[str, Any]], extra_results: Sequence[Dict[str, Any]]) -> List[Dict[str, str]]:
     failed_items: List[Dict[str, str]] = []
 
     def append_item(item_id: str, error: str) -> None:
-        candidate = {"id": item_id, "error": error}
+        text = normalize_error_text(error)
+        if not text:
+            return
+        candidate = {"id": item_id, "error": text}
         if candidate not in failed_items:
             failed_items.append(candidate)
 
-    for result in step_results:
+    for result in [*step_results, *extra_results]:
         if result.get("status") not in {"error", "timeout"}:
+            continue
+        if result.get("failed_items"):
+            first = result["failed_items"][0]
+            append_item(str(result.get("step_key", "unknown")), str(first.get("error", "")))
             continue
         stderr_tail = [str(line).strip() for line in result.get("stderr_tail", []) if str(line).strip()]
         append_item(str(result.get("step_key") or result.get("name") or "unknown"), stderr_tail[0] if stderr_tail else str(result.get("status", "error")))
-
-    for result, item_id in ((merge_result, "merge"), (summary_result, "summarize")):
-        if result.get("status") not in {"error", "timeout"}:
-            continue
-        stderr_tail = [str(line).strip() for line in result.get("stderr_tail", []) if str(line).strip()]
-        append_item(item_id, stderr_tail[0] if stderr_tail else str(result.get("status", "error")))
-
-    return failed_items[:limit]
+    return failed_items[:20]
 
 
-def main() -> int:
+def write_pipeline_meta(
+    *,
+    debug_dir: Path,
+    step_results: List[Dict[str, Any]],
+    step_meta_paths: Dict[str, str],
+    merge_result: Dict[str, Any],
+    summary_result: Dict[str, Any],
+    summary_output: Path,
+    fetch_elapsed: float,
+    total_elapsed: float,
+) -> Path:
+    meta_output = debug_dir / "pipeline.meta.json"
+    pipeline_items = merge_result.get("items", 0)
+    ok_calls = (
+        sum(1 for result in step_results if result.get("status") == "ok")
+        + (1 if merge_result.get("status") == "ok" else 0)
+        + (1 if summary_result.get("status") == "ok" else 0)
+    )
+    failed_calls = (
+        sum(1 for result in step_results if result.get("status") in {"error", "timeout"})
+        + (1 if merge_result.get("status") in {"error", "timeout"} else 0)
+        + (1 if summary_result.get("status") in {"error", "timeout"} else 0)
+    )
+
+    meta = {
+        "pipeline_version": "2.0.0",
+        "debug_dir": str(debug_dir),
+        "total_elapsed_s": round(total_elapsed, 1),
+        "fetch_elapsed_s": round(fetch_elapsed, 1),
+        "overall_status": "error" if merge_result["status"] != "ok" or summary_result["status"] != "ok" else "ok",
+        "steps": step_results,
+        "step_meta_paths": step_meta_paths,
+        "items": pipeline_items,
+        "call_stats": {
+            "kind": "steps",
+            "total_calls": len(step_results) + 2,
+            "ok_calls": ok_calls,
+            "failed_calls": failed_calls,
+        },
+        "failed_items": build_pipeline_failed_items(step_results, [merge_result, summary_result]),
+        "merge": merge_result,
+        "summary_format": "json",
+        "summary_status": summary_result.get("status"),
+        "summary_elapsed_s": summary_result.get("elapsed_s"),
+        "summary_output": str(summary_output),
+    }
+    write_json(meta_output, meta)
+    return meta_output
+
+
+def log_pipeline_summary(
+    logger: logging.Logger,
+    *,
+    total_elapsed: float,
+    step_results: List[Dict[str, Any]],
+    merge_result: Dict[str, Any],
+    summary_result: Dict[str, Any],
+    summary_output: Path,
+    meta_output: Path,
+    debug_dir: Path,
+) -> None:
+    logger.info("%s", "=" * 50)
+    logger.info("📊 Pipeline Summary (%.1fs total)", total_elapsed)
+    for result in [*step_results, merge_result, summary_result]:
+        logger.info("   %-14s %-8s %4d items %6.1fs", result["name"], result["status"], result["items"], result["elapsed_s"])
+    logger.info("   Summary: %s", summary_output)
+    logger.info("   Meta: %s", meta_output)
+    logger.info("   Debug Dir: %s", debug_dir)
+
+
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run the full news-digest pipeline and produce a compact summary output.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--defaults", type=Path, default=Path("config/defaults"), help="Skill defaults config dir")
-    parser.add_argument(
-        "--config",
-        type=Path,
-        default=Path("workspace/config"),
-        help="User config overlay dir (default: workspace/config)",
-    )
+    parser.add_argument("--config", type=Path, default=Path("workspace/config"), help="User config overlay dir (default: workspace/config)")
     parser.add_argument("--hours", type=int, default=48, help="Time window in hours")
-    parser.add_argument(
-        "--archive-dir",
-        type=Path,
-        default=Path("workspace/archive/news-digest"),
-        help="Archive root dir for previous summary JSON files (default: workspace/archive/news-digest)",
-    )
+    parser.add_argument("--archive-dir", type=Path, default=Path("workspace/archive/news-digest"), help="Archive root dir for previous summary JSON files (default: workspace/archive/news-digest)")
     parser.add_argument("--output", "-o", type=Path, required=True, help="Required output path for summary.json")
     parser.add_argument("--debug-dir", type=Path, default=None, help="Directory for debug and intermediate files")
     parser.add_argument("--summary-top", type=int, default=DEFAULT_SUMMARY_TOP, help="Top N items per topic in summary output")
-    parser.add_argument(
-        "--step-timeout",
-        type=int,
-        default=DEFAULT_TIMEOUT,
-        help="Per-step timeout in seconds (default: 1800)",
-    )
+    parser.add_argument("--step-timeout", type=int, default=DEFAULT_TIMEOUT, help="Per-step timeout in seconds (default: 1800)")
     parser.add_argument("--verbose", "-v", action="store_true")
     parser.add_argument("--force", action="store_true", help="Force re-fetch ignoring caches")
     parser.add_argument("--skip", type=str, default="", help="Comma-separated list of steps to skip")
+    return parser.parse_args()
 
-    args = parser.parse_args()
+
+def main() -> int:
+    args = parse_args()
     logger = setup_logging(args.verbose)
     skip_steps = {item.strip().lower() for item in args.skip.split(",") if item.strip()}
     config_dir = args.config if args.config and args.config.exists() else None
-
     debug_dir = resolve_debug_dir(args.debug_dir)
+    summary_output = resolve_unique_output_path(args.output)
+
     if args.archive_dir:
         args.archive_dir.mkdir(parents=True, exist_ok=True)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    summary_output = resolve_unique_output_path(args.output)
-    merged_output = debug_dir / "merged.json"
-    meta_output = debug_dir / "pipeline.meta.json"
-
-    tmp_rss = debug_dir / "rss.json"
-    tmp_twitter = debug_dir / "twitter.json"
-    tmp_google = debug_dir / "google.json"
-    tmp_github = debug_dir / "github.json"
-    tmp_trending = debug_dir / "trending.json"
-    tmp_api = debug_dir / "api.json"
-    tmp_v2ex = debug_dir / "v2ex.json"
-    tmp_reddit = debug_dir / "reddit.json"
 
     logger.info("📁 Debug directory: %s", debug_dir)
     logger.info("📝 Summary JSON output: %s", summary_output)
@@ -516,220 +857,54 @@ def main() -> int:
     if args.archive_dir:
         logger.info("🗄️ Archive root: %s", args.archive_dir)
 
-    common = ["--defaults", str(args.defaults)]
-    if config_dir:
-        common += ["--config", str(config_dir)]
-    common += ["--hours", str(args.hours)]
-    verbose_flag = ["--verbose"] if args.verbose else []
+    steps = build_fetch_steps(
+        defaults_dir=args.defaults,
+        config_dir=config_dir,
+        hours=args.hours,
+        debug_dir=debug_dir,
+        verbose=args.verbose,
+    )
 
-    steps = [
-        ("rss", "RSS", "fetch-rss.py", common + verbose_flag, tmp_rss, None),
-        ("twitter", "Twitter", "fetch-twitter.py", common + verbose_flag, tmp_twitter, get_cooldown_for_script("fetch-twitter.py")),
-        ("google", "Google News", "fetch-google.py", common + verbose_flag, tmp_google, get_cooldown_for_script("fetch-google.py")),
-        ("github", "GitHub", "fetch-github.py", common + verbose_flag, tmp_github, get_cooldown_for_script("fetch-github.py")),
-        (
-            "trending",
-            "GitHub Trending",
-            "fetch-github-trending.py",
-            ["--hours", str(args.hours), "--defaults", str(args.defaults)]
-            + (["--config", str(config_dir)] if config_dir else [])
-            + verbose_flag,
-            tmp_trending,
-            get_cooldown_for_script("fetch-github-trending.py"),
-        ),
-        ("api", "API Sources", "fetch-api.py", verbose_flag, tmp_api, None),
-        ("v2ex", "V2EX Hot", "fetch-v2ex.py", verbose_flag, tmp_v2ex, get_cooldown_for_script("fetch-v2ex.py")),
-        ("reddit", "Reddit", "fetch-reddit.py", common + verbose_flag, tmp_reddit, get_cooldown_for_script("fetch-reddit.py")),
-    ]
-
-    active_steps = []
-    step_meta_paths: Dict[str, str] = {}
-    for step_key, name, script, step_args, out_path, cooldown_s in steps:
-        if step_key in skip_steps:
-            logger.info("  ⏭️  %s: skipped (--skip)", name)
-            skipped_result = {
-                "name": name,
-                "step_key": step_key,
-                "status": "skipped",
-                "elapsed_s": 0,
-                "count": 0,
-                "effective_timeout_s": args.step_timeout,
-                "cooldown_s": cooldown_s,
-                "stderr_tail": [],
-            }
-            step_meta_path = debug_dir / f"{step_key}.meta.json"
-            write_json(
-                step_meta_path,
-                build_step_meta(
-                    step_key=step_key,
-                    name=name,
-                    script=script,
-                    result=skipped_result,
-                    output_path=out_path,
-                ),
-            )
-            step_meta_paths[step_key] = str(step_meta_path)
-            continue
-        active_steps.append((step_key, name, script, step_args, out_path, cooldown_s))
-
-    logger.info("🚀 Starting pipeline: %d/%d sources, %sh window", len(active_steps), len(steps), args.hours)
+    logger.info("🚀 Starting pipeline: %d/%d sources, %sh window", len([step for step in steps if step.step_key not in skip_steps]), len(steps), args.hours)
     t_start = time.time()
 
-    step_results = []
-    if active_steps:
-        with ThreadPoolExecutor(max_workers=len(active_steps)) as pool:
-            futures = {}
-            for step_key, name, script, step_args, out_path, cooldown_s in active_steps:
-                future = pool.submit(
-                    run_step,
-                    name,
-                    script,
-                    step_args,
-                    out_path,
-                    args.step_timeout,
-                    args.force,
-                    cooldown_s,
-                )
-                futures[future] = (step_key, name, script, out_path)
-
-            for future in as_completed(futures):
-                result = future.result()
-                step_key, name, script, out_path = futures[future]
-                result["step_key"] = step_key
-                step_results.append(result)
-                step_meta_path = debug_dir / f"{step_key}.meta.json"
-                write_json(
-                    step_meta_path,
-                    build_step_meta(
-                        step_key=step_key,
-                        name=name,
-                        script=script,
-                        result=result,
-                        output_path=out_path,
-                    ),
-                )
-                step_meta_paths[step_key] = str(step_meta_path)
-                status_icon = {"ok": "✅", "error": "❌", "timeout": "⏰"}.get(result["status"], "?")
-                logger.info("  %s %s: %s items (%ss)", status_icon, result["name"], result["count"], result["elapsed_s"])
-                if result["status"] != "ok" and result["stderr_tail"]:
-                    for line in result["stderr_tail"]:
-                        logger.debug("    %s", line)
-
-    fetch_elapsed = time.time() - t_start
+    step_results, step_meta_paths, fetch_elapsed = execute_fetch_steps(
+        steps=steps,
+        skip_steps=skip_steps,
+        timeout=args.step_timeout,
+        force=args.force,
+        debug_dir=debug_dir,
+        logger=logger,
+    )
     logger.info("📡 Fetch phase done in %.1fs", fetch_elapsed)
 
     logger.info("🔀 Merging & scoring...")
-    merge_args = ["--verbose"] if args.verbose else []
-    for flag, path in [
-        ("--rss", tmp_rss),
-        ("--twitter", tmp_twitter),
-        ("--google", tmp_google),
-        ("--github", tmp_github),
-        ("--trending", tmp_trending),
-        ("--api", tmp_api),
-        ("--v2ex", tmp_v2ex),
-        ("--reddit", tmp_reddit),
-    ]:
-        if path.exists():
-            merge_args += [flag, str(path)]
-    if args.archive_dir:
-        merge_args += ["--archive-dir", str(args.archive_dir)]
-
-    merge_result = run_step(
-        "Merge",
-        "merge-sources.py",
-        merge_args,
-        merged_output,
-        timeout=MERGE_TIMEOUT,
-        force=False,
-        cooldown_s=None,
-    )
-    merge_meta_path = debug_dir / "merge.meta.json"
-    write_json(
-        merge_meta_path,
-        build_step_meta(
-            step_key="merge",
-            name="Merge",
-            script="merge-sources.py",
-            result=merge_result,
-            output_path=merged_output,
-        ),
-    )
+    _, merge_result, merge_meta_path = run_merge_step(debug_dir, args.archive_dir, args.verbose)
     step_meta_paths["merge"] = str(merge_meta_path)
 
     if merge_result["status"] == "ok":
         logger.info("🧾 Rendering summary...")
-        summarize_args = [
-            "--input", str(merged_output),
-            "--top", str(args.summary_top),
-        ]
-        summary_result = run_step(
-            "Summarize",
-            "merge-summarize.py",
-            summarize_args,
-            summary_output,
-            timeout=SUMMARY_TIMEOUT,
-            force=False,
-            cooldown_s=None,
-        )
+        _, summary_result, summarize_meta_path = run_summary_step(debug_dir, summary_output, args.summary_top)
     else:
-        summary_result = {
-            "name": "Summarize",
-            "status": "skipped",
-            "elapsed_s": 0,
-            "count": 0,
-            "effective_timeout_s": SUMMARY_TIMEOUT,
-            "cooldown_s": None,
-            "stderr_tail": [],
-        }
-    summarize_meta_path = debug_dir / "summarize.meta.json"
-    write_json(
-        summarize_meta_path,
-        build_step_meta(
-            step_key="summarize",
-            name="Summarize",
-            script="merge-summarize.py",
-            result=summary_result,
-            output_path=summary_output,
-        ),
-    )
+        summary_spec = StepSpec("summarize", "Summarize", "merge-summarize.py", [], summary_output, None)
+        skipped_summary = make_process_result(spec=summary_spec, status="skipped", timeout=SUMMARY_TIMEOUT)
+        summary_result, summarize_meta_path = finalize_step(debug_dir, summary_spec, skipped_summary)
     step_meta_paths["summarize"] = str(summarize_meta_path)
 
     total_elapsed = time.time() - t_start
-
-    logger.info("%s", "=" * 50)
-    logger.info("📊 Pipeline Summary (%.1fs total)", total_elapsed)
-    for result in step_results:
-        logger.info("   %-14s %-8s %4d items %6.1fs", result["name"], result["status"], result["count"], result["elapsed_s"])
-    logger.info("   %-14s %-8s %4d items %6.1fs", "Merge", merge_result.get("status", "?"), merge_result.get("count", 0), merge_result.get("elapsed_s", 0))
-    logger.info("   %-14s %-8s %4d items %6.1fs", "Summarize", summary_result.get("status", "?"), summary_result.get("count", 0), summary_result.get("elapsed_s", 0))
-    logger.info("   Summary: %s", summary_output)
-    logger.info("   Meta: %s", meta_output)
-    logger.info("   Debug Dir: %s", debug_dir)
-
-    meta = {
-        "pipeline_version": "2.0.0",
-        "debug_dir": str(debug_dir),
-        "total_elapsed_s": round(total_elapsed, 1),
-        "fetch_elapsed_s": round(fetch_elapsed, 1),
-        "overall_status": (
-            "error"
-            if merge_result["status"] != "ok" or summary_result["status"] != "ok"
-            else "ok"
-        ),
-        "steps": step_results,
-        "step_meta_paths": step_meta_paths,
-        "failed_items": build_pipeline_failed_items(step_results, merge_result, summary_result),
-        "merge": merge_result,
-        "summary_format": "json",
-        "summary_status": summary_result.get("status"),
-        "summary_elapsed_s": summary_result.get("elapsed_s"),
-        "summary_output": str(summary_output),
-    }
-    write_json(meta_output, meta)
+    meta_output = write_pipeline_meta(
+        debug_dir=debug_dir,
+        step_results=step_results,
+        step_meta_paths=step_meta_paths,
+        merge_result=merge_result,
+        summary_result=summary_result,
+        summary_output=summary_output,
+        fetch_elapsed=fetch_elapsed,
+        total_elapsed=total_elapsed,
+    )
 
     removed_archive_dirs = cleanup_archive_root(args.archive_dir) if args.archive_dir else 0
-    archived_outputs = archive_run_artifacts(args.archive_dir, summary_output, meta_output, step_meta_paths)
+    archived_outputs = archive_outputs(args.archive_dir, summary_output, meta_output, step_meta_paths)
     if removed_archive_dirs:
         logger.info("🧹 Removed %d expired archive date directories", removed_archive_dirs)
     if archived_outputs.get("summary_json"):
@@ -737,6 +912,7 @@ def main() -> int:
     if archived_outputs.get("pipeline_meta"):
         logger.info("🗂️  Archived meta dir: %s", archived_outputs.get("meta_dir"))
 
+    meta = load_json_file(meta_output) or {}
     meta["archive"] = {
         "root": str(args.archive_dir) if args.archive_dir else None,
         "retention_days": ARCHIVE_RETENTION_DAYS,
@@ -744,6 +920,17 @@ def main() -> int:
         **archived_outputs,
     }
     write_json(meta_output, meta)
+
+    log_pipeline_summary(
+        logger,
+        total_elapsed=total_elapsed,
+        step_results=step_results,
+        merge_result=merge_result,
+        summary_result=summary_result,
+        summary_output=summary_output,
+        meta_output=meta_output,
+        debug_dir=debug_dir,
+    )
 
     if merge_result["status"] != "ok":
         logger.error("❌ Merge failed: %s", merge_result["stderr_tail"])

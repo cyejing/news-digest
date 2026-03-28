@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 HISTORY_DAYS = 7
 DEGRADED_THRESHOLD = 0.5
 REPORT_LIMIT = 20
+ERROR_TEXT_LIMIT = 180
 META_FILE_RE = re.compile(r".*\.meta\d*\.json$")
 META_SUFFIX_RE = re.compile(r"\.meta(\d*)\.json$")
 DEFAULT_INPUT_DIR = Path("/tmp/news-digest/debug")
@@ -39,6 +40,19 @@ def load_json(path: Path) -> Optional[Dict[str, Any]]:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
+
+
+def trim_error_text(value: Any, limit: int = ERROR_TEXT_LIMIT) -> str:
+    if value is None:
+        return ""
+    lines = [str(line).strip() for line in str(value).splitlines() if str(line).strip()]
+    if not lines:
+        return ""
+    text = " | ".join(lines[:2])
+    text = " ".join(text.split())
+    if len(text) <= limit:
+        return text
+    return text[: max(limit - 3, 1)].rstrip() + "..."
 
 
 def discover_meta_files(input_dir: Path) -> List[Path]:
@@ -142,7 +156,16 @@ def compute_pipeline_state(meta: Dict[str, Any]) -> Dict[str, Any]:
     else:
         state = "ok"
 
-    failed_items = meta.get("failed_items", [])
+    failed_items = [
+        {
+            "id": str(item.get("id", "item")).strip() or "item",
+            "error": trim_error_text(item.get("error")),
+        }
+        for item in meta.get("failed_items", [])
+        if isinstance(item, dict) and trim_error_text(item.get("error"))
+    ]
+    call_stats = meta.get("call_stats", {}) if isinstance(meta.get("call_stats"), dict) else {}
+    items = int(meta.get("items", 0) or 0)
 
     return {
         "step_key": "pipeline",
@@ -150,9 +173,17 @@ def compute_pipeline_state(meta: Dict[str, Any]) -> Dict[str, Any]:
         "status": overall_status,
         "state": state,
         "elapsed_s": float(meta.get("total_elapsed_s", 0) or 0),
-        "count": int(meta.get("merge", {}).get("count", 0) or 0) if isinstance(meta.get("merge"), dict) else 0,
+        "items": items,
+        "call_stats": {
+            "kind": str(call_stats.get("kind", "steps")),
+            "total_calls": int(call_stats.get("total_calls", len(steps)) or 0),
+            "ok_calls": int(call_stats.get("ok_calls", sum(1 for step in steps if step.get("status") == "ok")) or 0),
+            "failed_calls": int(
+                call_stats.get("failed_calls", sum(1 for step in steps if step.get("status") in {"error", "timeout"})) or 0
+            ),
+        },
         "failed_records": len(failed_items) or len(failed_steps),
-        "failed_items": failed_items if isinstance(failed_items, list) else [],
+        "failed_items": failed_items,
         "details": {
             "pipeline": {
                 "fetch_elapsed_s": meta.get("fetch_elapsed_s", 0),
@@ -172,20 +203,23 @@ def compute_step_state(meta: Dict[str, Any]) -> Dict[str, Any]:
 
     status = meta.get("status", "error")
     details = meta.get("details", {}) if isinstance(meta.get("details"), dict) else {}
-    record_summary = details.get("record_summary", {}) if isinstance(details.get("record_summary"), dict) else {}
-    failed_records = int(record_summary.get("error", 0) or 0)
+    call_stats = meta.get("call_stats", {}) if isinstance(meta.get("call_stats"), dict) else {}
+    items = int(meta.get("items", 0) or 0)
+    total_calls = int(call_stats.get("total_calls", 0) or 0)
+    ok_calls = int(call_stats.get("ok_calls", 0) or 0)
+    failed_calls = int(call_stats.get("failed_calls", 0) or 0)
     warning_reasons: List[str] = []
 
-    if status in {"error", "timeout"}:
+    if status in {"error", "timeout", "pending"}:
         state = "error"
     elif status == "skipped":
         state = "skipped"
     else:
         state = "ok"
 
-    if failed_records > 0 and state == "ok":
+    if failed_calls > 0 and state == "ok":
         state = "warn"
-        warning_reasons.append(f"{failed_records} record failures")
+        warning_reasons.append(f"{failed_calls} call failures")
 
     deduplication = details.get("deduplication", {}) if isinstance(details.get("deduplication"), dict) else {}
     if deduplication:
@@ -203,9 +237,22 @@ def compute_step_state(meta: Dict[str, Any]) -> Dict[str, Any]:
         "status": status,
         "state": state,
         "elapsed_s": float(meta.get("elapsed_s", 0) or 0),
-        "count": int(meta.get("count", 0) or 0),
-        "failed_records": failed_records,
-        "failed_items": meta.get("failed_items", []),
+        "items": items,
+        "call_stats": {
+            "kind": str(call_stats.get("kind", meta.get("step_key", "step"))),
+            "total_calls": total_calls,
+            "ok_calls": ok_calls,
+            "failed_calls": failed_calls,
+        },
+        "failed_records": failed_calls,
+        "failed_items": [
+            {
+                "id": str(item.get("id", "item")).strip() or "item",
+                "error": trim_error_text(item.get("error")),
+            }
+            for item in meta.get("failed_items", [])
+            if isinstance(item, dict) and trim_error_text(item.get("error"))
+        ],
         "details": details,
         "reasons": warning_reasons,
     }
@@ -228,16 +275,17 @@ def build_history_rows(diagnostics: List[Dict[str, Any]], now: float) -> List[Di
                 "state": diagnostic["state"],
                 "status": diagnostic["status"],
                 "elapsed_s": diagnostic["elapsed_s"],
-                "count": diagnostic["count"],
+                "items": diagnostic["items"],
+                "call_stats": diagnostic["call_stats"],
                 "failed_records": diagnostic["failed_records"],
                 "error_summary": str(diagnostic["failed_items"][0]["error"]).strip() if diagnostic.get("failed_items") else "",
                 "failed_items": [
                     {
-                        "id": str(item.get("id", "unknown")).strip() or "unknown",
-                        "error": str(item.get("error", "unknown error")).strip() or "unknown error",
+                        "id": str(item.get("id", "item")).strip() or "item",
+                        "error": trim_error_text(item.get("error")),
                     }
                     for item in diagnostic.get("failed_items", [])
-                    if isinstance(item, dict)
+                    if isinstance(item, dict) and trim_error_text(item.get("error"))
                 ][:10],
             }
         )
@@ -279,15 +327,14 @@ def print_history_report(history_rows: List[Dict[str, Any]], logger: logging.Log
     logger.info(
         f"History report: {len(history_rows)} steps tracked, {len(unhealthy)} unhealthy in last {HISTORY_DAYS} days"
     )
+    name_width = max((len(row["name"]) for row in history_rows[:REPORT_LIMIT]), default=0)
     for row in history_rows[:REPORT_LIMIT]:
-        if row["unhealthy"]:
+        if row["unhealthy"] or row["warn"] > 0 or row["error"] > 0:
             icon = "⚠️"
-        elif row["warn"] > 0 or row["error"] > 0:
-            icon = "🟡"
         else:
             icon = "✅"
         logger.info(
-            f"{icon} {row['name']} - ok:{row['ok']} warn:{row['warn']} error:{row['error']} "
+            f"{icon} {row['name']:<{name_width}} - ok:{row['ok']} warn:{row['warn']} error:{row['error']} "
             f"({row['degraded_rate']:.0%} degraded)"
         )
     return len(unhealthy)
@@ -312,6 +359,7 @@ def print_run_details(diagnostics: List[Dict[str, Any]], logger: logging.Logger)
             return (label, 0)
 
     logger.info("Run details:")
+    name_width = max((len(item["name"]) for items in run_groups.values() for item in items), default=0)
     for run_label in sorted(run_groups.keys(), key=sort_key, reverse=True):
         title = f"=== {run_label} ==="
         border = "=" * len(title)
@@ -324,25 +372,30 @@ def print_run_details(diagnostics: List[Dict[str, Any]], logger: logging.Logger)
             key=lambda item: (0 if item["step_key"] == "pipeline" else 1, item["name"]),
         )
         for item in run_items:
-            if item["state"] == "error":
+            if item["state"] in {"error", "warn"}:
                 icon = "⚠️"
-            elif item["state"] == "warn":
-                icon = "🟡"
             elif item["state"] == "skipped":
                 icon = "⏭️"
             else:
                 icon = "✅"
 
+            call_stats = item.get("call_stats", {})
+            ok_calls = int(call_stats.get("ok_calls", 0) or 0)
+            failed_calls = int(call_stats.get("failed_calls", 0) or 0)
+            total_calls = int(call_stats.get("total_calls", 0) or 0)
             logger.info(
-                "%s %s   count:%s | failed:%s | elapsed:%.1fs",
+                "%s %-*s - calls:%s/%s/%s | items:%s | elapsed:%.1fs",
                 icon,
+                name_width,
                 item["name"],
-                item.get("count", 0),
-                item.get("failed_records", 0),
+                ok_calls,
+                failed_calls,
+                total_calls,
+                item.get("items", 0),
                 float(item.get("elapsed_s", 0) or 0),
             )
             for failed_item in item.get("failed_items", []):
-                logger.info("   - %s: %s", failed_item.get("id", "unknown"), failed_item.get("error", "unknown error"))
+                logger.info("   - %s: %s", failed_item.get("id", "item"), trim_error_text(failed_item.get("error")))
 
 
 def parse_args() -> argparse.Namespace:
