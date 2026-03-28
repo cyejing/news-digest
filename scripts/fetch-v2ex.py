@@ -237,6 +237,7 @@ def fetch_v2ex_hot(logger: logging.Logger) -> Dict[str, Any]:
         "priority": SOURCE_PRIORITY,
         "topics": sorted({topic for article in articles for topic in article.get("topics", [])}),
         "status": "ok" if articles else "error",
+        "items": len(articles),
         "count": len(articles),
         "fetched_count": len(raw_topics),
         "articles": articles,
@@ -247,6 +248,9 @@ def fetch_v2ex_hot(logger: logging.Logger) -> Dict[str, Any]:
     return {
         "generated": datetime.now(timezone.utc).isoformat(),
         "source_type": "v2ex",
+        "calls_total": 1,
+        "calls_ok": 1 if articles else 0,
+        "items_total": len(articles),
         "sources_total": 1,
         "sources_ok": 1 if articles else 0,
         "total_articles": len(articles),
@@ -260,14 +264,16 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    python3 fetch-v2ex.py --output v2ex.json
+    python3 fetch-v2ex.py --defaults config/defaults --config workspace/config --output v2ex.json
     python3 fetch-v2ex.py --verbose
         """,
     )
+    parser.add_argument("--defaults", type=Path, default=Path("config/defaults"), help="Accepted for CLI consistency; not used by V2EX fetch")
+    parser.add_argument("--config", type=Path, help="Accepted for CLI consistency; not used by V2EX fetch")
     parser.add_argument("--output", "-o", type=Path, help="Output JSON path")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
-    parser.add_argument("--hours", type=int, default=48, help="Ignored (pipeline compatibility)")
-    parser.add_argument("--force", action="store_true", help="Ignored (pipeline compatibility)")
+    parser.add_argument("--hours", type=int, default=48, help="Accepted for CLI consistency; not used by V2EX fetch")
+    parser.add_argument("--force", action="store_true", help="Accepted for CLI consistency; this fetcher always refreshes")
     args = parser.parse_args()
 
     logger = setup_logging(args.verbose)
@@ -278,6 +284,9 @@ Examples:
 
     try:
         data = fetch_v2ex_hot(logger)
+        data["defaults_dir"] = str(args.defaults)
+        data["config_dir"] = str(args.config) if args.config else None
+        data["hours"] = args.hours
         with open(args.output, "w", encoding="utf-8") as handle:
             json.dump(data, handle, ensure_ascii=False, indent=2)
         logger.info(

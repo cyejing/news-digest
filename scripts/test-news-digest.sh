@@ -27,6 +27,37 @@ VERBOSE=false
 FORCE=false
 SKIP_STEPS=""
 UNIT_MODULES=""
+STEP_OUTPUT_DIR="$DEBUG_DIR"
+
+fetch_step_script() {
+  case "$1" in
+    rss) echo "$SCRIPT_DIR/fetch-rss.py" ;;
+    github) echo "$SCRIPT_DIR/fetch-github.py" ;;
+    trending) echo "$SCRIPT_DIR/fetch-github-trending.py" ;;
+    api) echo "$SCRIPT_DIR/fetch-api.py" ;;
+    twitter) echo "$SCRIPT_DIR/fetch-twitter.py" ;;
+    reddit) echo "$SCRIPT_DIR/fetch-reddit.py" ;;
+    v2ex) echo "$SCRIPT_DIR/fetch-v2ex.py" ;;
+    google) echo "$SCRIPT_DIR/fetch-google.py" ;;
+    *) return 1 ;;
+  esac
+}
+
+step_output_path() {
+  case "$1" in
+    rss) echo "$RSS_JSON" ;;
+    github) echo "$GITHUB_JSON" ;;
+    trending) echo "$TRENDING_JSON" ;;
+    api) echo "$API_JSON" ;;
+    twitter) echo "$TWITTER_JSON" ;;
+    reddit) echo "$REDDIT_JSON" ;;
+    v2ex) echo "$V2EX_JSON" ;;
+    google) echo "$GOOGLE_JSON" ;;
+    merge) echo "$MERGED_JSON" ;;
+    summarize) echo "$STEP_OUTPUT_DIR/summary.json" ;;
+    *) return 1 ;;
+  esac
+}
 
 usage() {
   cat <<'HELP'
@@ -92,15 +123,27 @@ bool_flag() {
   fi
 }
 
-config_args() {
-  if [ -n "$CONFIG_DIR" ] && [ -d "$CONFIG_DIR" ]; then
-    printf -- '--config\n%s\n' "$CONFIG_DIR"
-  fi
-}
-
 run_cmd() {
   echo "+ $*"
   "$@"
+}
+
+append_common_fetch_args() {
+  local -n cmd_ref=$1
+  local include_defaults="${2:-true}"
+  if [ "$include_defaults" = true ]; then
+    cmd_ref+=(--defaults "$DEFAULTS_DIR")
+  fi
+  if [ -n "$CONFIG_DIR" ] && [ -d "$CONFIG_DIR" ]; then
+    cmd_ref+=(--config "$CONFIG_DIR")
+  fi
+  cmd_ref+=(--hours "$HOURS")
+  if [ "$VERBOSE" = true ]; then
+    cmd_ref+=(--verbose)
+  fi
+  if [ "$FORCE" = true ]; then
+    cmd_ref+=(--force)
+  fi
 }
 
 parse_common_args() {
@@ -150,13 +193,27 @@ run_full() {
 }
 
 run_fetch_step() {
-  local name="$1"
-  shift
-  local output_path="$1"
-  shift
-
+  local step="$1"
+  local output_path
+  output_path="$(step_output_path "$step")"
+  local script_path
+  script_path="$(fetch_step_script "$step")"
   mkdir -p "$TMP_DIR" "$DEBUG_DIR"
-  local cmd=(uv run "$@")
+  local cmd=(uv run "$script_path")
+  case "$step" in
+    api|v2ex)
+      if [ "$VERBOSE" = true ]; then
+        cmd+=(--verbose)
+      fi
+      if [ "$FORCE" = true ]; then
+        cmd+=(--force)
+      fi
+      ;;
+    *)
+      append_common_fetch_args cmd true
+      ;;
+  esac
+  cmd+=(--output "$output_path")
   run_cmd "${cmd[@]}"
   [ -f "$output_path" ] || { echo "Missing output: $output_path" >&2; exit 1; }
 }
@@ -177,29 +234,8 @@ run_step() {
       fi
       run_cmd "${cmd[@]}"
       ;;
-    rss)
-      run_fetch_step "$step" "$RSS_JSON" "$SCRIPT_DIR/fetch-rss.py" --defaults "$DEFAULTS_DIR" $(config_args) --hours "$HOURS" --output "$RSS_JSON" $(bool_flag --verbose "$VERBOSE") $(bool_flag --force "$FORCE")
-      ;;
-    github)
-      run_fetch_step "$step" "$GITHUB_JSON" "$SCRIPT_DIR/fetch-github.py" --defaults "$DEFAULTS_DIR" $(config_args) --hours "$HOURS" --output "$GITHUB_JSON" $(bool_flag --verbose "$VERBOSE") $(bool_flag --force "$FORCE")
-      ;;
-    trending)
-      run_fetch_step "$step" "$TRENDING_JSON" "$SCRIPT_DIR/fetch-github-trending.py" --defaults "$DEFAULTS_DIR" $(config_args) --hours "$HOURS" --output "$TRENDING_JSON" $(bool_flag --verbose "$VERBOSE") $(bool_flag --force "$FORCE")
-      ;;
-    api)
-      run_fetch_step "$step" "$API_JSON" "$SCRIPT_DIR/fetch-api.py" --output "$API_JSON" $(bool_flag --verbose "$VERBOSE")
-      ;;
-    twitter)
-      run_fetch_step "$step" "$TWITTER_JSON" "$SCRIPT_DIR/fetch-twitter.py" --defaults "$DEFAULTS_DIR" $(config_args) --hours "$HOURS" --output "$TWITTER_JSON" $(bool_flag --verbose "$VERBOSE") $(bool_flag --force "$FORCE")
-      ;;
-    reddit)
-      run_fetch_step "$step" "$REDDIT_JSON" "$SCRIPT_DIR/fetch-reddit.py" --defaults "$DEFAULTS_DIR" $(config_args) --hours "$HOURS" --output "$REDDIT_JSON" $(bool_flag --verbose "$VERBOSE") $(bool_flag --force "$FORCE")
-      ;;
-    v2ex)
-      run_fetch_step "$step" "$V2EX_JSON" "$SCRIPT_DIR/fetch-v2ex.py" --output "$V2EX_JSON" $(bool_flag --verbose "$VERBOSE") $(bool_flag --force "$FORCE")
-      ;;
-    google)
-      run_fetch_step "$step" "$GOOGLE_JSON" "$SCRIPT_DIR/fetch-google.py" --defaults "$DEFAULTS_DIR" $(config_args) --hours "$HOURS" --output "$GOOGLE_JSON" $(bool_flag --verbose "$VERBOSE") $(bool_flag --force "$FORCE")
+    rss|github|trending|api|twitter|reddit|v2ex|google)
+      run_fetch_step "$step"
       ;;
     merge)
       local cmd=(uv run "$SCRIPT_DIR/merge-sources.py" --output "$MERGED_JSON" --archive-dir "$DEFAULT_ARCHIVE_ROOT_DIR")
@@ -254,7 +290,7 @@ run_unit() {
 }
 
 run_health() {
-  mkdir -p "$DEBUG_DIR"
+  mkdir -p "$STEP_OUTPUT_DIR"
   local cmd=(uv run "$SCRIPT_DIR/source-health.py" --input-dir "$DEBUG_DIR")
   if [ "$VERBOSE" = true ]; then
     cmd+=(--verbose)

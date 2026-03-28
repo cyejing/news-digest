@@ -62,6 +62,10 @@ NON_WORD_RE = re.compile(r"[^\w\s\u3400-\u4dbf\u4e00-\u9fff]+", re.UNICODE)
 SPACE_RE = re.compile(r"\s+")
 
 
+# ---------------------------------------------------------------------------
+# Generic helpers
+# ---------------------------------------------------------------------------
+
 def setup_logging(verbose: bool) -> logging.Logger:
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
@@ -269,6 +273,9 @@ def calculate_similarity_from_features(features_a: Dict[str, Any], features_b: D
     return min(score, 1.0)
 
 
+# ---------------------------------------------------------------------------
+# Similarity, scoring, and clustering
+# ---------------------------------------------------------------------------
 
 class UnionFind:
     def __init__(self, size: int):
@@ -662,9 +669,9 @@ def apply_domain_limits(articles: List[Dict[str, Any]], max_per_domain: int = 3)
     return result
 
 
-def merge_article_sources(articles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    return articles
-
+# ---------------------------------------------------------------------------
+# History loading and topic grouping
+# ---------------------------------------------------------------------------
 
 def load_previous_digests(archive_dir: Path, days: int = 14) -> List[str]:
     if not archive_dir.exists():
@@ -696,11 +703,6 @@ def load_previous_digests(archive_dir: Path, days: int = 14) -> List[str]:
 
     logging.info("Loaded %d titles from previous %d days under %s", len(seen_titles), days, archive_dir)
     return seen_titles
-
-
-def apply_previous_digest_penalty(articles: List[Dict[str, Any]], previous_titles: Iterable[str]) -> List[Dict[str, Any]]:
-    # Kept for compatibility; penalties are now computed inside deduplicate_articles().
-    return articles
 
 
 def rerank_topic_articles(articles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -786,6 +788,10 @@ def group_by_topics(articles: List[Dict[str, Any]], dedup_across_topics: bool = 
 
     return topic_groups
 
+
+# ---------------------------------------------------------------------------
+# Input normalization
+# ---------------------------------------------------------------------------
 
 def build_article(title: str, link: str, date: str, source_type: str, source_name: str, source_id: str, source_priority: int, topics: List[str], **extra: Any) -> Dict[str, Any]:
     article = {
@@ -914,6 +920,108 @@ def collect_articles(
     return all_articles
 
 
+def load_input_payloads(args: argparse.Namespace) -> Dict[str, Dict[str, Any]]:
+    return {
+        "rss": load_source_data(args.rss),
+        "twitter": load_source_data(args.twitter),
+        "google": load_source_data(args.google),
+        "github": load_source_data(args.github),
+        "trending": load_source_data(args.trending),
+        "reddit": load_source_data(args.reddit),
+        "api": load_source_data(args.api),
+        "v2ex": load_source_data(args.v2ex),
+    }
+
+
+def log_input_summary(payloads: Dict[str, Dict[str, Any]]) -> None:
+    logging.info(
+        "Loaded sources - RSS: %s, Twitter: %s, Google: %s, GitHub: %s + %s trending, Reddit: %s, API: %s, V2EX: %s",
+        payloads["rss"].get("total_articles", 0),
+        payloads["twitter"].get("total_articles", 0),
+        payloads["google"].get("total_articles", 0),
+        payloads["github"].get("total_articles", 0),
+        payloads["trending"].get("total", 0),
+        payloads["reddit"].get("total_posts", 0),
+        payloads["api"].get("total_articles", 0),
+        payloads["v2ex"].get("total_articles", 0),
+    )
+
+
+def process_articles(
+    payloads: Dict[str, Dict[str, Any]],
+    archive_dir: Optional[Path],
+) -> Tuple[Dict[str, List[Dict[str, Any]]], List[str], int]:
+    all_articles = collect_articles(
+        payloads["rss"],
+        payloads["twitter"],
+        payloads["google"],
+        payloads["github"],
+        payloads["trending"],
+        payloads["reddit"],
+        payloads["api"],
+        payloads["v2ex"],
+    )
+    total_collected = len(all_articles)
+    logging.info("Total articles collected: %d", total_collected)
+
+    previous_titles: List[str] = load_previous_digests(archive_dir) if archive_dir else []
+    deduplicated_articles = deduplicate_articles(all_articles, previous_titles)
+    topic_groups = group_by_topics(deduplicated_articles, dedup_across_topics=True)
+
+    for topic, topic_articles in list(topic_groups.items()):
+        before = len(topic_articles)
+        topic_groups[topic] = apply_domain_limits(topic_articles)
+        after = len(topic_groups[topic])
+        if before != after:
+            logging.info("Domain limits (%s): %d → %d", topic, before, after)
+
+    return topic_groups, previous_titles, total_collected
+
+
+# ---------------------------------------------------------------------------
+# Output assembly
+# ---------------------------------------------------------------------------
+
+def build_merged_output(
+    payloads: Dict[str, Dict[str, Any]],
+    topic_groups: Dict[str, List[Dict[str, Any]]],
+    previous_titles: List[str],
+    total_collected: int,
+) -> Dict[str, Any]:
+    total_after_domain_limits = sum(len(items) for items in topic_groups.values())
+    topic_counts = {topic: len(items) for topic, items in topic_groups.items()}
+    return {
+        "generated": datetime.now(timezone.utc).isoformat(),
+        "input_sources": {
+            "rss_articles": payloads["rss"].get("total_articles", 0),
+            "twitter_articles": payloads["twitter"].get("total_articles", 0),
+            "google_articles": payloads["google"].get("total_articles", 0),
+            "github_articles": payloads["github"].get("total_articles", 0),
+            "github_trending": payloads["trending"].get("total", 0),
+            "reddit_posts": payloads["reddit"].get("total_posts", 0),
+            "api_articles": payloads["api"].get("total_articles", 0),
+            "v2ex_articles": payloads["v2ex"].get("total_articles", 0),
+            "total_input": total_collected,
+        },
+        "processing": {
+            "deduplication_applied": True,
+            "multi_source_merging": True,
+            "previous_digest_penalty": len(previous_titles) > 0,
+            "quality_scoring": True,
+            "scoring_version": "2.0",
+        },
+        "output_stats": {
+            "total_articles": total_after_domain_limits,
+            "topics_count": len(topic_groups),
+            "topic_distribution": topic_counts,
+        },
+        "topics": {
+            topic: {"count": len(items), "articles": items}
+            for topic, items in topic_groups.items()
+        },
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Merge articles from all sources with quality scoring and deduplication.",
@@ -940,87 +1048,11 @@ def main() -> int:
         args.output = Path(temp_path)
 
     try:
-        rss_data = load_source_data(args.rss)
-        twitter_data = load_source_data(args.twitter)
-        google_data = load_source_data(args.google)
-        github_data = load_source_data(args.github)
-        trending_data = load_source_data(args.trending)
-        reddit_data = load_source_data(args.reddit)
-        api_data = load_source_data(args.api)
-        v2ex_data = load_source_data(args.v2ex)
-
-        logger.info(
-            "Loaded sources - RSS: %s, Twitter: %s, Google: %s, GitHub: %s + %s trending, Reddit: %s, API: %s, V2EX: %s",
-            rss_data.get("total_articles", 0),
-            twitter_data.get("total_articles", 0),
-            google_data.get("total_articles", 0),
-            github_data.get("total_articles", 0),
-            trending_data.get("total", 0),
-            reddit_data.get("total_posts", 0),
-            api_data.get("total_articles", 0) if api_data else 0,
-            v2ex_data.get("total_articles", 0) if v2ex_data else 0,
-        )
-
-        all_articles = collect_articles(
-            rss_data,
-            twitter_data,
-            google_data,
-            github_data,
-            trending_data,
-            reddit_data,
-            api_data,
-            v2ex_data,
-        )
-        total_collected = len(all_articles)
-        logger.info("Total articles collected: %d", total_collected)
-
-        previous_titles: List[str] = []
-        if args.archive_dir:
-            previous_titles = load_previous_digests(args.archive_dir)
-
-        all_articles = deduplicate_articles(all_articles, previous_titles)
-        topic_groups = group_by_topics(all_articles, dedup_across_topics=True)
-
-        for topic in topic_groups:
-            before = len(topic_groups[topic])
-            topic_groups[topic] = apply_domain_limits(topic_groups[topic])
-            after = len(topic_groups[topic])
-            if before != after:
-                logger.info("Domain limits (%s): %d → %d", topic, before, after)
-
-        total_after_domain_limits = sum(len(items) for items in topic_groups.values())
-        topic_counts = {topic: len(items) for topic, items in topic_groups.items()}
-
-        output = {
-            "generated": datetime.now(timezone.utc).isoformat(),
-            "input_sources": {
-                "rss_articles": rss_data.get("total_articles", 0),
-                "twitter_articles": twitter_data.get("total_articles", 0),
-                "google_articles": google_data.get("total_articles", 0),
-                "github_articles": github_data.get("total_articles", 0),
-                "github_trending": trending_data.get("total", 0),
-                "reddit_posts": reddit_data.get("total_posts", 0),
-                "api_articles": api_data.get("total_articles", 0) if api_data else 0,
-                "v2ex_articles": v2ex_data.get("total_articles", 0) if v2ex_data else 0,
-                "total_input": total_collected,
-            },
-            "processing": {
-                "deduplication_applied": True,
-                "multi_source_merging": True,
-                "previous_digest_penalty": len(previous_titles) > 0,
-                "quality_scoring": True,
-                "scoring_version": "2.0",
-            },
-            "output_stats": {
-                "total_articles": total_after_domain_limits,
-                "topics_count": len(topic_groups),
-                "topic_distribution": topic_counts,
-            },
-            "topics": {
-                topic: {"count": len(items), "articles": items}
-                for topic, items in topic_groups.items()
-            },
-        }
+        payloads = load_input_payloads(args)
+        log_input_summary(payloads)
+        topic_groups, previous_titles, total_collected = process_articles(payloads, args.archive_dir)
+        output = build_merged_output(payloads, topic_groups, previous_titles, total_collected)
+        total_after_domain_limits = output["output_stats"]["total_articles"]
 
         with open(args.output, "w", encoding="utf-8") as handle:
             json.dump(output, handle, ensure_ascii=False, indent=2)

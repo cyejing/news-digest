@@ -4,15 +4,15 @@
 
 ## 占位符
 
-| 占位符 | daily | weekly |
-|--------|-------|--------|
-| `<MODE>` | `daily` | `weekly` |
-| `<RSS_HOURS>` | `48` | `168` |
-| `<EXTRA_SECTIONS>` | *(无)* | `📊 每周趋势总结` |
-| `<WORKSPACE>` | 工作区路径 | |
-| `<SKILL_DIR>` | skill 安装路径 | |
-| `<DATE>` | YYYY-MM-DD | |
-| `<LANGUAGE>` | `Chinese` | |
+| 占位符                | daily      | weekly      |
+|--------------------|------------|-------------|
+| `<MODE>`           | `daily`    | `weekly`    |
+| `<RSS_HOURS>`      | `48`       | `168`       |
+| `<EXTRA_SECTIONS>` | *(无)*      | `📊 每周趋势总结` |
+| `<WORKSPACE>`      | 工作区路径      |             |
+| `<SKILL_DIR>`      | skill 安装路径 |             |
+| `<DATE>`           | YYYY-MM-DD |             |
+| `<LANGUAGE>`       | `Chinese`  |             |
 
 生成 **<DATE>** 的 <MODE> 全球科技与 AI 摘要。使用 `<DATE>` 作为报告日期，不要推断。
 
@@ -28,9 +28,13 @@
      --output /tmp/summary.json \
      --verbose --force
    ```
+   - 这是明显的长耗时任务。执行前先判断当前环境是否支持 subagent
+   - 如果支持 subagent，强烈要求优先并默认使用 subagent 运行这个命令，不要让主对话直接以前台同步方式阻塞执行
+   - 只有在确认当前环境不支持 subagent 时，才允许查看当前环境适合哪种长任务运行方式，再选择替代方案
 2. 只读取：
-   - `/tmp/summary.json`
-3. 根据 `summary.json` 写 Markdown摘要
+    - `/tmp/summary.json`
+   - 不要读取 `meta/` 或任何 fetch 结果 JSON；诊断信息只在排障时才需要
+3. 根据 `summary.json` 写 Markdown
 4. 将 Markdown 保存到 `<WORKSPACE>/archive/news-digest/<DATE>/markdown/`
 5. 不要并发运行多个摘要任务；`/tmp/summary.json` 是固定路径，并发运行会互相覆盖
 
@@ -48,9 +52,8 @@
 
 ## 输出与归档
 
-- 最终只输出 Markdown摘要
-- 聊天窗口中也要输出完整 Markdown，不要只给简版摘要或只写几条精选
-- 聊天输出应与归档文件内容保持一致；如果平台单条消息长度受限，可分多段连续发送，但不要省略 topic 或条目
+- 最终输出完整 Markdown，不要只给简版摘要或只写几条精选
+- 输出应与归档文件内容保持一致；如果平台单条消息长度受限，可分多段连续发送，但不要省略 topic 或条目
 - 将 Markdown 保存到 `<WORKSPACE>/archive/news-digest/<DATE>/markdown/<MODE>.md`
 - 如果同名文件已存在，改为 `<MODE>1.md`、`<MODE>2.md`
 

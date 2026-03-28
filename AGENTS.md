@@ -38,6 +38,59 @@ uv run <SKILL_DIR>/scripts/run-pipeline.py \
   --verbose --force
 ```
 
+## 重构约束
+
+后续继续维护时，优先保持这几条结构约束，不要再回退到“脚本能跑但职责混杂”的状态：
+
+- `run-pipeline.py`
+  - 保持“编排层 + 诊断层 + 归档层”分离
+  - `main()` 只保留高层流程，不要重新把 step meta 组装、archive 复制、payload 解析塞回主函数
+  - step 诊断统一通过：
+    - `items`
+    - `call_stats`
+    - `failed_items`
+  - 不要重新把 `count` 恢复成 pipeline / meta / 日志的主语义
+- `source-health.py`
+  - 保持“三层结构”：
+    - meta 发现
+    - 诊断归一
+    - 文本渲染
+  - 只读取 meta，不再回读原始抓取结果 JSON
+  - 报告固定为：
+    - `History report`
+    - `Run details`
+- `test-news-digest.sh`
+  - 保持统一调度入口，不要重新扩散成多个测试脚本
+  - step 脚本映射、输出路径映射、公共参数拼装应集中维护
+- `merge-sources.py`
+  - 保持“输入归一 → 评分/相似性/去重 → topic 分组 → 输出组装”的阶段化结构
+  - 优先做单文件内部收口，不急着拆新模块
+- fetch 脚本
+  - 优先保持 CLI 一致：
+    - `--defaults`
+    - `--config`
+    - `--output`
+    - `--hours`
+    - `--verbose`
+    - `--force`
+  - 顶层输出优先补统一字段：
+    - `calls_total`
+    - `calls_ok`
+    - `calls_kind`
+    - `items_total`
+  - 单条结果优先补统一字段：
+    - `status`
+    - `items`
+    - `count`
+  - 旧字段可以保留做兼容，但新增逻辑优先消费统一语义字段
+
+可以删除的旧逻辑原则：
+
+- 删除已经没有业务价值的 backward compatibility 分支
+- 删除只为旧 `count` 语义服务的展示或 fallback
+- 删除空壳 helper 和只剩兼容含义的注释
+- 如果 step meta 已有完整失败诊断，不要再新增第二套错误表达
+
 ## Topic 规则
 
 默认 topic：
@@ -91,6 +144,39 @@ RSS 默认池规则：
 - step meta 的失败诊断统一使用 `failed_items`；不要再维护单独的 `error_messages` 作为主失败来源
 - 除非确认目标站点稳定支持更高频率，否则不要加并发
 
+## Fetch 输出协议
+
+fetch 脚本顶层结果应尽量统一包含：
+
+- `source_type`
+- `calls_total`
+- `calls_ok`
+- `calls_kind`
+- `items_total`
+
+单个 source / topic / repo 结果应尽量统一包含：
+
+- `status`
+- `items`
+- `count`
+
+当前为了兼容 merge 和现有 fixture，旧字段仍允许保留，例如：
+
+- `sources_total`
+- `sources_ok`
+- `total_articles`
+- `total_posts`
+- `subreddits`
+- `topics`
+- `repos`
+
+但新增逻辑应优先消费统一语义字段：
+
+- `items_total`
+- `calls_total`
+- `calls_ok`
+- `failed_items`
+
 ## 诊断入口
 
 配置检查：
@@ -116,6 +202,11 @@ uv run <SKILL_DIR>/scripts/source-health.py --input-dir <WORKSPACE>/archive/news
 - `run-pipeline.py` 会在 debug 目录下写每个步骤的 `.meta.json`
 - `run-pipeline.py` 也会把 `summary.json` 和 `meta/` 归档到 `<WORKSPACE>/archive/news-digest/<DATE>/`
 - `source-health.py` 只读取 meta，不再回读原始结果 JSON
+- step meta 的核心字段是：
+  - `status`
+  - `items`
+  - `call_stats`
+  - `failed_items`
 - 如果 `--input-dir` 指向 archive 根目录，`source-health.py` 会自动聚合最近 7 天 `<DATE>/meta/` 下的元数据
 - `source-health.py` 的报告结构固定为：
   - `History report`：步骤级汇总，不展开详细错误

@@ -12,6 +12,7 @@ import re
 import statistics
 import sys
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -23,6 +24,37 @@ ERROR_TEXT_LIMIT = 180
 META_FILE_RE = re.compile(r".*\.meta\d*\.json$")
 META_SUFFIX_RE = re.compile(r"\.meta(\d*)\.json$")
 DEFAULT_INPUT_DIR = Path("/tmp/news-digest/debug")
+
+
+@dataclass
+class DiagnosticRecord:
+    step_key: str
+    name: str
+    status: str
+    state: str
+    elapsed_s: float
+    items: int
+    call_stats: Dict[str, Any]
+    failed_items: List[Dict[str, str]]
+    details: Dict[str, Any]
+    observed_ts: float
+    run_label: Optional[str] = None
+
+
+@dataclass
+class HistoryRow:
+    step_key: str
+    name: str
+    checks: int
+    ok: int
+    warn: int
+    error: int
+    degraded_rate: float
+    unhealthy: bool
+    median_elapsed_s: float
+    latest_issue_ts: Optional[float]
+    latest_issue_summary: str
+    check_details: List[Dict[str, Any]]
 
 
 def setup_logging(verbose: bool) -> logging.Logger:
@@ -139,7 +171,19 @@ def build_direct_run_label(input_dir: Path, now_ts: float) -> str:
     return f"{date_label}-current"
 
 
-def compute_pipeline_state(meta: Dict[str, Any]) -> Dict[str, Any]:
+def build_failed_items(items: Any) -> List[Dict[str, str]]:
+    return [
+        {
+            "id": str(item.get("id", "item")).strip() or "item",
+            "error": trim_error_text(item.get("error")),
+        }
+        for item in (items or [])
+        if isinstance(item, dict) and trim_error_text(item.get("error"))
+    ]
+
+
+def compute_pipeline_state(meta: Dict[str, Any], observed_ts: Optional[float] = None) -> DiagnosticRecord:
+    observed_ts = observed_ts or time.time()
     steps = [step for step in meta.get("steps", []) if isinstance(step, dict)]
     failed_steps = [step.get("name", "unknown") for step in steps if step.get("status") in {"error", "timeout"}]
     skipped_steps = [step.get("name", "unknown") for step in steps if step.get("status") == "skipped"]
@@ -156,25 +200,18 @@ def compute_pipeline_state(meta: Dict[str, Any]) -> Dict[str, Any]:
     else:
         state = "ok"
 
-    failed_items = [
-        {
-            "id": str(item.get("id", "item")).strip() or "item",
-            "error": trim_error_text(item.get("error")),
-        }
-        for item in meta.get("failed_items", [])
-        if isinstance(item, dict) and trim_error_text(item.get("error"))
-    ]
+    failed_items = build_failed_items(meta.get("failed_items", []))
     call_stats = meta.get("call_stats", {}) if isinstance(meta.get("call_stats"), dict) else {}
     items = int(meta.get("items", 0) or 0)
 
-    return {
-        "step_key": "pipeline",
-        "name": "Pipeline",
-        "status": overall_status,
-        "state": state,
-        "elapsed_s": float(meta.get("total_elapsed_s", 0) or 0),
-        "items": items,
-        "call_stats": {
+    return DiagnosticRecord(
+        step_key="pipeline",
+        name="Pipeline",
+        status=overall_status,
+        state=state,
+        elapsed_s=float(meta.get("total_elapsed_s", 0) or 0),
+        items=items,
+        call_stats={
             "kind": str(call_stats.get("kind", "steps")),
             "total_calls": int(call_stats.get("total_calls", len(steps)) or 0),
             "ok_calls": int(call_stats.get("ok_calls", sum(1 for step in steps if step.get("status") == "ok")) or 0),
@@ -182,9 +219,8 @@ def compute_pipeline_state(meta: Dict[str, Any]) -> Dict[str, Any]:
                 call_stats.get("failed_calls", sum(1 for step in steps if step.get("status") in {"error", "timeout"})) or 0
             ),
         },
-        "failed_records": len(failed_items) or len(failed_steps),
-        "failed_items": failed_items,
-        "details": {
+        failed_items=failed_items,
+        details={
             "pipeline": {
                 "fetch_elapsed_s": meta.get("fetch_elapsed_s", 0),
                 "failed_steps": failed_steps,
@@ -193,13 +229,14 @@ def compute_pipeline_state(meta: Dict[str, Any]) -> Dict[str, Any]:
                 "step_count": len(steps),
             }
         },
-        "reasons": [],
-    }
+        observed_ts=observed_ts,
+    )
 
 
-def compute_step_state(meta: Dict[str, Any]) -> Dict[str, Any]:
+def compute_step_state(meta: Dict[str, Any], observed_ts: Optional[float] = None) -> DiagnosticRecord:
+    observed_ts = observed_ts or time.time()
     if "pipeline_version" in meta:
-        return compute_pipeline_state(meta)
+        return compute_pipeline_state(meta, observed_ts)
 
     status = meta.get("status", "error")
     details = meta.get("details", {}) if isinstance(meta.get("details"), dict) else {}
@@ -231,66 +268,58 @@ def compute_step_state(meta: Dict[str, Any]) -> Dict[str, Any]:
     if processing.get("scoring_version"):
         warning_reasons.append(f"scoring v{processing['scoring_version']}")
 
-    return {
-        "step_key": meta.get("step_key", "unknown"),
-        "name": meta.get("name", meta.get("step_key", "unknown")),
-        "status": status,
-        "state": state,
-        "elapsed_s": float(meta.get("elapsed_s", 0) or 0),
-        "items": items,
-        "call_stats": {
+    return DiagnosticRecord(
+        step_key=meta.get("step_key", "unknown"),
+        name=meta.get("name", meta.get("step_key", "unknown")),
+        status=status,
+        state=state,
+        elapsed_s=float(meta.get("elapsed_s", 0) or 0),
+        items=items,
+        call_stats={
             "kind": str(call_stats.get("kind", meta.get("step_key", "step"))),
             "total_calls": total_calls,
             "ok_calls": ok_calls,
             "failed_calls": failed_calls,
         },
-        "failed_records": failed_calls,
-        "failed_items": [
-            {
-                "id": str(item.get("id", "item")).strip() or "item",
-                "error": trim_error_text(item.get("error")),
-            }
-            for item in meta.get("failed_items", [])
-            if isinstance(item, dict) and trim_error_text(item.get("error"))
-        ],
-        "details": details,
-        "reasons": warning_reasons,
-    }
+        failed_items=build_failed_items(meta.get("failed_items", [])),
+        details={**details, "reasons": warning_reasons},
+        observed_ts=observed_ts,
+    )
 
 
-def build_history_rows(diagnostics: List[Dict[str, Any]], now: float) -> List[Dict[str, Any]]:
+def build_history_rows(diagnostics: List[DiagnosticRecord], now: float) -> List[HistoryRow]:
     cutoff = now - HISTORY_DAYS * 86400
     grouped: Dict[str, Dict[str, Any]] = {}
     for diagnostic in diagnostics:
-        observed_ts = float(diagnostic.get("observed_ts", now))
+        observed_ts = float(diagnostic.observed_ts or now)
         if observed_ts <= cutoff:
             continue
-        step_key = diagnostic["step_key"]
+        step_key = diagnostic.step_key
         if step_key not in grouped:
-            grouped[step_key] = {"name": diagnostic["name"], "checks": []}
-        grouped[step_key]["name"] = diagnostic["name"]
+            grouped[step_key] = {"name": diagnostic.name, "checks": []}
+        grouped[step_key]["name"] = diagnostic.name
         grouped[step_key]["checks"].append(
             {
                 "ts": observed_ts,
-                "state": diagnostic["state"],
-                "status": diagnostic["status"],
-                "elapsed_s": diagnostic["elapsed_s"],
-                "items": diagnostic["items"],
-                "call_stats": diagnostic["call_stats"],
-                "failed_records": diagnostic["failed_records"],
-                "error_summary": str(diagnostic["failed_items"][0]["error"]).strip() if diagnostic.get("failed_items") else "",
+                "state": diagnostic.state,
+                "status": diagnostic.status,
+                "elapsed_s": diagnostic.elapsed_s,
+                "items": diagnostic.items,
+                "call_stats": diagnostic.call_stats,
+                "failed_records": diagnostic.call_stats.get("failed_calls", 0),
+                "error_summary": str(diagnostic.failed_items[0]["error"]).strip() if diagnostic.failed_items else "",
                 "failed_items": [
                     {
                         "id": str(item.get("id", "item")).strip() or "item",
                         "error": trim_error_text(item.get("error")),
                     }
-                    for item in diagnostic.get("failed_items", [])
+                    for item in diagnostic.failed_items
                     if isinstance(item, dict) and trim_error_text(item.get("error"))
                 ][:10],
             }
         )
 
-    rows: List[Dict[str, Any]] = []
+    rows: List[HistoryRow] = []
     for step_key, info in grouped.items():
         checks = info.get("checks", [])
         if not isinstance(checks, list) or not checks:
@@ -303,53 +332,50 @@ def build_history_rows(diagnostics: List[Dict[str, Any]], now: float) -> List[Di
         latest_issue = max(degraded_checks, key=lambda check: check["ts"], default=None)
         checks_sorted = sorted(checks, key=lambda check: check["ts"], reverse=True)
         rows.append(
-            {
-                "step_key": step_key,
-                "name": info.get("name", step_key),
-                "checks": len(checks),
-                "ok": ok_count,
-                "warn": warn_count,
-                "error": error_count,
-                "degraded_rate": degraded_rate,
-                "unhealthy": len(checks) >= 2 and degraded_rate > DEGRADED_THRESHOLD,
-                "median_elapsed_s": statistics.median([check["elapsed_s"] for check in checks]) if checks else 0.0,
-                "latest_issue_ts": latest_issue["ts"] if latest_issue else None,
-                "latest_issue_summary": latest_issue.get("error_summary", "") if latest_issue else "",
-                "check_details": checks_sorted,
-            }
+            HistoryRow(
+                step_key=step_key,
+                name=info.get("name", step_key),
+                checks=len(checks),
+                ok=ok_count,
+                warn=warn_count,
+                error=error_count,
+                degraded_rate=degraded_rate,
+                unhealthy=len(checks) >= 2 and degraded_rate > DEGRADED_THRESHOLD,
+                median_elapsed_s=statistics.median([check["elapsed_s"] for check in checks]) if checks else 0.0,
+                latest_issue_ts=latest_issue["ts"] if latest_issue else None,
+                latest_issue_summary=latest_issue.get("error_summary", "") if latest_issue else "",
+                check_details=checks_sorted,
+            )
         )
-    rows.sort(key=lambda row: (-row["degraded_rate"], -row["error"], row["name"]))
+    rows.sort(key=lambda row: (-row.degraded_rate, -row.error, row.name))
     return rows
 
 
-def print_history_report(history_rows: List[Dict[str, Any]], logger: logging.Logger) -> int:
-    unhealthy = [row for row in history_rows if row["unhealthy"]]
-    logger.info(
-        f"History report: {len(history_rows)} steps tracked, {len(unhealthy)} unhealthy in last {HISTORY_DAYS} days"
-    )
-    name_width = max((len(row["name"]) for row in history_rows[:REPORT_LIMIT]), default=0)
+def render_history_report(history_rows: List[HistoryRow]) -> List[str]:
+    unhealthy = [row for row in history_rows if row.unhealthy]
+    lines = [f"History report: {len(history_rows)} steps tracked, {len(unhealthy)} unhealthy in last {HISTORY_DAYS} days"]
+    name_width = max((len(row.name) for row in history_rows[:REPORT_LIMIT]), default=0)
     for row in history_rows[:REPORT_LIMIT]:
-        if row["unhealthy"] or row["warn"] > 0 or row["error"] > 0:
+        if row.unhealthy or row.warn > 0 or row.error > 0:
             icon = "⚠️"
         else:
             icon = "✅"
-        logger.info(
-            f"{icon} {row['name']:<{name_width}} - ok:{row['ok']} warn:{row['warn']} error:{row['error']} "
-            f"({row['degraded_rate']:.0%} degraded)"
+        lines.append(
+            f"{icon} {row.name:<{name_width}} - ok:{row.ok} warn:{row.warn} error:{row.error} ({row.degraded_rate:.0%} degraded)"
         )
-    return len(unhealthy)
+    return lines
 
 
-def print_run_details(diagnostics: List[Dict[str, Any]], logger: logging.Logger) -> None:
-    run_groups: Dict[str, List[Dict[str, Any]]] = {}
+def render_run_details(diagnostics: List[DiagnosticRecord]) -> List[str]:
+    run_groups: Dict[str, List[DiagnosticRecord]] = {}
     for diagnostic in diagnostics:
-        run_label = diagnostic.get("run_label")
+        run_label = diagnostic.run_label
         if not run_label:
             continue
         run_groups.setdefault(run_label, []).append(diagnostic)
 
     if not run_groups:
-        return
+        return []
 
     def sort_key(label: str) -> tuple[str, int]:
         date_part, _, run_part = label.rpartition("-")
@@ -358,44 +384,34 @@ def print_run_details(diagnostics: List[Dict[str, Any]], logger: logging.Logger)
         except ValueError:
             return (label, 0)
 
-    logger.info("Run details:")
-    name_width = max((len(item["name"]) for items in run_groups.values() for item in items), default=0)
+    lines = ["Run details:"]
+    name_width = max((len(item.name) for items in run_groups.values() for item in items), default=0)
     for run_label in sorted(run_groups.keys(), key=sort_key, reverse=True):
         title = f"=== {run_label} ==="
         border = "=" * len(title)
-        logger.info("")
-        logger.info(border)
-        logger.info(title)
-        logger.info(border)
+        lines.extend(["", border, title, border])
         run_items = sorted(
             run_groups[run_label],
-            key=lambda item: (0 if item["step_key"] == "pipeline" else 1, item["name"]),
+            key=lambda item: (0 if item.step_key == "pipeline" else 1, item.name),
         )
         for item in run_items:
-            if item["state"] in {"error", "warn"}:
+            if item.state in {"error", "warn"}:
                 icon = "⚠️"
-            elif item["state"] == "skipped":
+            elif item.state == "skipped":
                 icon = "⏭️"
             else:
                 icon = "✅"
 
-            call_stats = item.get("call_stats", {})
+            call_stats = item.call_stats
             ok_calls = int(call_stats.get("ok_calls", 0) or 0)
             failed_calls = int(call_stats.get("failed_calls", 0) or 0)
             total_calls = int(call_stats.get("total_calls", 0) or 0)
-            logger.info(
-                "%s %-*s - calls:%s/%s/%s | items:%s | elapsed:%.1fs",
-                icon,
-                name_width,
-                item["name"],
-                ok_calls,
-                failed_calls,
-                total_calls,
-                item.get("items", 0),
-                float(item.get("elapsed_s", 0) or 0),
+            lines.append(
+                f"{icon} {item.name:<{name_width}} - calls:{ok_calls}/{failed_calls}/{total_calls} | items:{item.items} | elapsed:{float(item.elapsed_s or 0):.1f}s"
             )
-            for failed_item in item.get("failed_items", []):
-                logger.info("   - %s: %s", failed_item.get("id", "item"), trim_error_text(failed_item.get("error")))
+            for failed_item in item.failed_items:
+                lines.append(f"   - {failed_item.get('id', 'item')}: {trim_error_text(failed_item.get('error'))}")
+    return lines
 
 
 def parse_args() -> argparse.Namespace:
@@ -414,7 +430,7 @@ def main() -> int:
     args = parse_args()
     logger = setup_logging(args.verbose)
     now = time.time()
-    current_diagnostics: List[Dict[str, Any]] = []
+    current_diagnostics: List[DiagnosticRecord] = []
     meta_files = discover_all_meta_files(args.input_dir, HISTORY_DAYS)
     direct_run_label = build_direct_run_label(args.input_dir, now)
     for path in meta_files:
@@ -422,18 +438,21 @@ def main() -> int:
         if not payload:
             logger.debug(f"skip invalid meta file: {path}")
             continue
-        diagnostic = compute_step_state(payload)
+        observed_ts = parse_archive_observed_ts(path) if "meta" in {parent.name for parent in path.parents} else now
+        diagnostic = compute_step_state(payload, observed_ts)
         if "meta" in {parent.name for parent in path.parents}:
-            diagnostic["observed_ts"] = parse_archive_observed_ts(path)
-            diagnostic["run_label"] = parse_archive_run_label(path)
+            diagnostic.run_label = parse_archive_run_label(path)
         else:
-            diagnostic["run_label"] = direct_run_label
+            diagnostic.run_label = direct_run_label
         current_diagnostics.append(diagnostic)
 
     logger.info(f"Loaded {len(current_diagnostics)} metadata files")
     history_rows = build_history_rows(current_diagnostics, now)
-    unhealthy = print_history_report(history_rows, logger)
-    print_run_details([item for item in current_diagnostics if item.get("run_label")], logger)
+    for line in render_history_report(history_rows):
+        logger.info(line)
+    for line in render_run_details([item for item in current_diagnostics if item.run_label]):
+        logger.info(line)
+    unhealthy = len([row for row in history_rows if row.unhealthy])
     return 0 if unhealthy >= 0 else 1
 
 

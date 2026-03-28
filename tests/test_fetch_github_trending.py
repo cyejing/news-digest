@@ -79,15 +79,40 @@ class TestFetchGithubTrending(unittest.TestCase):
 
         with patch.object(fetch_github_trending, "urlopen", return_value=FakeResponse()):
             with patch.object(fetch_github_trending.time, "sleep", return_value=None):
-                repos = fetch_github_trending.fetch_trending_repos(
+                result = fetch_github_trending.fetch_trending_repos(
                     hours=48,
                     github_token=None,
                     defaults_dir=None,
                     config_dir=None,
                 )
 
+        repos = result["repos"]
         self.assertEqual(len(repos), 1)
         self.assertEqual(repos[0]["topics"], ["github"])
+        self.assertEqual(result["queries_total"], 6)
+        self.assertEqual(result["queries_ok"], 6)
+
+    def test_trending_results_track_query_failures(self):
+        with patch.object(
+            fetch_github_trending,
+            "load_github_trending_queries",
+            return_value=[
+                {"topic": "github", "q": "query one"},
+                {"topic": "github", "q": "query two"},
+            ],
+        ):
+            with patch.object(fetch_github_trending, "urlopen", side_effect=[Exception("boom"), Exception("boom")]):
+                with patch.object(fetch_github_trending.time, "sleep", return_value=None):
+                    result = fetch_github_trending.fetch_trending_repos(
+                        hours=48,
+                        github_token=None,
+                        defaults_dir=DEFAULTS_DIR,
+                        config_dir=None,
+                    )
+
+        self.assertEqual(result["queries_total"], 2)
+        self.assertEqual(result["queries_ok"], 0)
+        self.assertEqual(result["query_stats"][0]["status"], "error")
 
 
 if __name__ == "__main__":

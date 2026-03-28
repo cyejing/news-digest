@@ -209,7 +209,8 @@ def extract_items_from_payload(payload: Optional[Dict[str, Any]], fallback: int 
     if not payload:
         return int(fallback or 0)
     return int(
-        payload.get("total_articles")
+        payload.get("items_total")
+        or payload.get("total_articles")
         or payload.get("total_posts")
         or payload.get("total_releases")
         or payload.get("total_results")
@@ -314,6 +315,16 @@ def extract_call_stats(payload: Optional[Dict[str, Any]], *, step_key: str, stat
 
     if not payload:
         return single_call(step_key)
+
+    if any(key in payload for key in ("calls_total", "calls_ok")):
+        total_calls = int(payload.get("calls_total", 0) or 0)
+        ok_calls = int(payload.get("calls_ok", 0) or 0)
+        return {
+            "kind": str(payload.get("calls_kind", step_key)),
+            "total_calls": total_calls,
+            "ok_calls": ok_calls,
+            "failed_calls": max(total_calls - ok_calls, 0),
+        }
 
     if isinstance(payload.get("sources"), list):
         entries = [entry for entry in payload["sources"] if isinstance(entry, dict)]

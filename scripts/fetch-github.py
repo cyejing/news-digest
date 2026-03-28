@@ -374,6 +374,7 @@ def fetch_releases_with_retry(source: Dict[str, Any], cutoff: datetime, github_t
                 "topics": topics,
                 "status": "ok",
                 "attempts": attempt + 1,
+                "items": len(articles),
                 "count": len(articles),
                 "articles": articles,
             }
@@ -398,6 +399,7 @@ def fetch_releases_with_retry(source: Dict[str, Any], cutoff: datetime, github_t
                     "status": "error",
                     "attempts": attempt + 1,
                     "error": error_msg,
+                    "items": 0,
                     "count": 0,
                     "articles": [],
                 }
@@ -441,7 +443,6 @@ def main():
 Examples:
     python3 fetch-github.py
     python3 fetch-github.py --defaults config/defaults --config workspace/config --hours 168 -o results.json
-    python3 fetch-github.py --config workspace/config --verbose  # backward compatibility
     
 Environment Variables:
     GITHUB_TOKEN    GitHub personal access token (optional, improves rate limits)
@@ -516,12 +517,7 @@ Environment Variables:
     try:
         cutoff = datetime.now(timezone.utc) - timedelta(hours=args.hours)
         
-        # Backward compatibility: if only --config provided, use old behavior
-        if args.config and args.defaults == Path("config/defaults") and not args.defaults.exists():
-            logger.debug("Backward compatibility mode: using --config as sole source")
-            sources = load_sources(args.config, None)
-        else:
-            sources = load_sources(args.defaults, args.config)
+        sources = load_sources(args.defaults, args.config)
         
         if not sources:
             logger.warning("No GitHub sources found or all disabled")
@@ -571,6 +567,10 @@ Environment Variables:
             "hours": args.hours,
             "github_token_used": github_token is not None,
             "cooldown_s": cooldown_s,
+            "calls_total": len(results),
+            "calls_ok": ok_count,
+            "calls_kind": "sources",
+            "items_total": total_articles,
             "sources_total": len(results),
             "sources_ok": ok_count,
             "total_articles": total_articles,

@@ -59,6 +59,25 @@ files:
 - `<WORKSPACE>/archive/news-digest/<DATE>/meta/`
   当天运行诊断元数据目录。
 
+## 管道产物
+
+- `/tmp/summary.json`
+  本次运行给大模型消费的唯一输入。
+- `<WORKSPACE>/archive/news-digest/<DATE>/json/`
+  归档后的 `summary.json`。
+- `<WORKSPACE>/archive/news-digest/<DATE>/meta/`
+  每个步骤的 `*.meta.json` 和 `pipeline.meta.json`。
+
+step meta 的关键字段：
+
+- `status`
+- `items`
+- `call_stats`
+  包含 `total_calls / ok_calls / failed_calls`
+- `failed_items`
+
+健康诊断和历史检查都基于这些 meta 字段，不再回读原始抓取结果 JSON。
+
 ## 主流程
 
 唯一推荐入口。不要改写步骤，不要额外解析内部 JSON：
@@ -74,11 +93,14 @@ uv run <SKILL_DIR>/scripts/run-pipeline.py \
 ```
 
 - 同一台机器上不要并发运行多个摘要任务；`/tmp/summary.json` 是固定路径，并发运行会互相覆盖
-- `run-pipeline.py` 耗时较长；如果运行环境支持 **subagent** 后台代理或长任务执行，应优先用它来执行这个脚本，再等待结果返回
+- `run-pipeline.py` 是明显的长耗时任务。执行前先判断当前环境是否支持 **subagent**
+- 如果支持 **subagent**，强烈要求优先并默认使用 **subagent** 运行 `run-pipeline.py`，不要让主对话直接以前台同步方式执行这个命令
+- 只有在确认当前环境不支持 **subagent** 时，才允许进一步查看当前环境适合哪种长任务运行方式，再选择替代方案
 - 允许足够长的执行时间：
   - 单步骤 timeout 默认可到 `1800s`
   - 整体通常在 `10-30` 分钟内完成
   - 不要因为几分钟内没有新输出就中断或误判失败
+- 使用 **subagent** 或替代长任务方案时，保持该任务独占本次摘要运行；在它完成前不要再启动第二个 `run-pipeline.py`
 - 运行完成后只读取 `/tmp/summary.json`
 
 这里的 `<DATE>` 表示本次运行对应的日期目录，格式固定为 `YYYY-MM-DD`，例如 `2026-03-29`。

@@ -150,6 +150,7 @@ def fetch_topic(topic: Dict[str, Any], logger: logging.Logger) -> Dict[str, Any]
         "queries_executed": len(queries),
         "queries_ok": ok_queries,
         "query_stats": query_stats,
+        "items": len(articles),
         "count": len(articles),
         "articles": articles,
     }
@@ -159,13 +160,18 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Fetch Google News results via bb-browser.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+    python3 fetch-google.py --defaults config/defaults --config workspace/config --output google.json
+    python3 fetch-google.py --output google.json --verbose
+        """,
     )
-    parser.add_argument("--defaults", type=Path, default=Path("config/defaults"))
-    parser.add_argument("--config", type=Path, help="User configuration directory")
+    parser.add_argument("--defaults", type=Path, default=Path("config/defaults"), help="Default configuration directory")
+    parser.add_argument("--config", type=Path, help="User configuration directory for overlays")
     parser.add_argument("--output", "-o", type=Path, help="Output JSON path")
-    parser.add_argument("--verbose", "-v", action="store_true")
-    parser.add_argument("--hours", type=int, default=48, help="Ignored (pipeline compatibility)")
-    parser.add_argument("--force", action="store_true", help="Ignored (pipeline compatibility)")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
+    parser.add_argument("--hours", type=int, default=48, help="Accepted for CLI consistency; not used by Google News fetch")
+    parser.add_argument("--force", action="store_true", help="Accepted for CLI consistency; this fetcher always refreshes")
     args = parser.parse_args()
 
     logger = setup_logging(args.verbose)
@@ -186,6 +192,9 @@ def main() -> int:
             "source_type": "google",
             "defaults_dir": str(args.defaults),
             "config_dir": str(args.config) if args.config else None,
+            "calls_total": len(topic_results),
+            "calls_ok": ok_topics,
+            "items_total": total_articles,
             "topics_total": len(topic_results),
             "topics_ok": ok_topics,
             "total_articles": total_articles,

@@ -179,6 +179,7 @@ def fetch_source(source: Dict[str, Any], cutoff: datetime) -> Dict[str, Any]:
             "topics": source.get("topics", []),
             "status": "ok",
             "attempts": 1,
+            "items": len(articles),
             "count": len(articles),
             "articles": articles,
         }
@@ -193,6 +194,7 @@ def fetch_source(source: Dict[str, Any], cutoff: datetime) -> Dict[str, Any]:
             "status": "error",
             "attempts": 1,
             "error": str(exc)[:200],
+            "items": 0,
             "count": 0,
             "articles": [],
         }
@@ -202,13 +204,18 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Sequential Twitter/X fetcher via bb-browser site adapters.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+    python3 fetch-twitter.py --defaults config/defaults --config workspace/config --hours 48 --output twitter.json
+    python3 fetch-twitter.py --output twitter.json --verbose
+        """,
     )
-    parser.add_argument("--defaults", type=Path, default=Path("config/defaults"))
-    parser.add_argument("--config", type=Path, help="User configuration directory")
+    parser.add_argument("--defaults", type=Path, default=Path("config/defaults"), help="Default configuration directory")
+    parser.add_argument("--config", type=Path, help="User configuration directory for overlays")
     parser.add_argument("--hours", type=int, default=48, help="Time window in hours")
     parser.add_argument("--output", "-o", type=Path, help="Output JSON path")
-    parser.add_argument("--verbose", "-v", action="store_true")
-    parser.add_argument("--force", action="store_true", help="Ignored (pipeline compatibility)")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
+    parser.add_argument("--force", action="store_true", help="Accepted for CLI consistency; this fetcher always refreshes")
     args = parser.parse_args()
 
     logger = setup_logging(args.verbose)
@@ -241,6 +248,9 @@ def main() -> int:
             "defaults_dir": str(args.defaults),
             "config_dir": str(args.config) if args.config else None,
             "hours": args.hours,
+            "calls_total": len(results),
+            "calls_ok": ok_count,
+            "items_total": total_articles,
             "sources_total": len(results),
             "sources_ok": ok_count,
             "total_articles": total_articles,

@@ -283,6 +283,7 @@ def fetch_source(source: Dict[str, Any], limit: int = 15) -> Dict[str, Any]:
             "topics": topics,
             "status": "error",
             "error": f"Unknown source: {source_id}",
+            "items": 0,
             "count": 0,
             "articles": [],
         }
@@ -300,6 +301,7 @@ def fetch_source(source: Dict[str, Any], limit: int = 15) -> Dict[str, Any]:
             "priority": priority,
             "topics": topics,
             "status": "ok",
+            "items": len(articles),
             "count": len(articles),
             "articles": articles,
         }
@@ -312,6 +314,7 @@ def fetch_source(source: Dict[str, Any], limit: int = 15) -> Dict[str, Any]:
             "topics": topics,
             "status": "error",
             "error": str(e)[:100],
+            "items": 0,
             "count": 0,
             "articles": [],
         }
@@ -389,6 +392,10 @@ def main():
         output = {
             "generated": datetime.now(timezone.utc).isoformat(),
             "source_type": "api",
+            "calls_total": len(results),
+            "calls_ok": ok_count,
+            "calls_kind": "sources",
+            "items_total": total_articles,
             "sources_total": len(results),
             "sources_ok": ok_count,
             "total_articles": total_articles,

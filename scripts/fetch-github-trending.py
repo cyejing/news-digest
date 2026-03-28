@@ -218,7 +218,7 @@ def load_topics_config(defaults_dir: Path, config_dir: Optional[Path] = None) ->
 def fetch_trending_repos(hours: int = 48, github_token: Optional[str] = None,
                          min_stars: int = 50, per_topic: int = 15,
                          defaults_dir: Optional[Path] = None,
-                         config_dir: Optional[Path] = None) -> List[Dict[str, Any]]:
+                         config_dir: Optional[Path] = None) -> Dict[str, Any]:
     """
     通过 GitHub Search API 抓取热门仓库。
     
@@ -233,8 +233,14 @@ def fetch_trending_repos(hours: int = 48, github_token: Optional[str] = None,
         defaults_dir: 默认配置目录
         config_dir: 用户配置目录（可选）
         
-    返回:
-        仓库列表，每个元素包含:
+        返回:
+        包含仓库列表与 query 统计的字典:
+        - repos: 仓库列表
+        - query_stats: 每次查询的状态
+        - queries_total: 查询总数
+        - queries_ok: 成功查询数
+
+        repos 中每个元素包含:
         - repo: 仓库全名 (owner/repo)
         - name: 仓库名称
         - description: 描述
@@ -274,6 +280,7 @@ def fetch_trending_repos(hours: int = 48, github_token: Optional[str] = None,
 
     all_repos = []
     seen_repos = set()
+    query_stats: List[Dict[str, Any]] = []
     cooldown_s = get_github_trending_cooldown_seconds()
     last_finished_at: Optional[float] = None
     logging.info("GitHub trending sequential cooldown: %.1fs", cooldown_s)
@@ -319,11 +326,31 @@ def fetch_trending_repos(hours: int = 48, github_token: Optional[str] = None,
                     "source_type": "github_trending",
                 })
 
+            query_stats.append({
+                "query": tq["q"],
+                "topic": tq["topic"],
+                "status": "ok",
+                "count": len(data.get("items", [])),
+            })
             logging.debug(f"Trending [{tq['topic']}]: {len(data.get('items', []))} repos")
 
         except HTTPError as e:
+            query_stats.append({
+                "query": tq["q"],
+                "topic": tq["topic"],
+                "status": "error",
+                "count": 0,
+                "error": f"HTTP {e.code}",
+            })
             logging.warning(f"GitHub trending search error [{tq['topic']}]: HTTP {e.code}")
         except Exception as e:
+            query_stats.append({
+                "query": tq["q"],
+                "topic": tq["topic"],
+                "status": "error",
+                "count": 0,
+                "error": str(e)[:180],
+            })
             logging.warning(f"GitHub trending search error [{tq['topic']}]: {e}")
         finally:
             last_finished_at = time.time()
@@ -331,7 +358,12 @@ def fetch_trending_repos(hours: int = 48, github_token: Optional[str] = None,
     # 按星标数降序排序
     all_repos.sort(key=lambda x: -x["stars"])
     logging.info(f"🔥 Trending: {len(all_repos)} repos found across {len(trending_queries)} topics")
-    return all_repos
+    return {
+        "repos": all_repos,
+        "query_stats": query_stats,
+        "queries_total": len(query_stats),
+        "queries_ok": sum(1 for stat in query_stats if stat.get("status") == "ok"),
+    }
 
 
 def main():
@@ -357,11 +389,12 @@ Examples:
 
     setup_logging(args.verbose)
     github_token = resolve_github_token()
-    repos = fetch_trending_repos(
+    trending_result = fetch_trending_repos(
         args.hours, github_token, args.min_stars, args.per_topic,
         defaults_dir=args.defaults,
         config_dir=args.config
     )
+    repos = trending_result["repos"]
 
     output = {
         "generated": datetime.now(timezone.utc).isoformat(),
@@ -369,6 +402,13 @@ Examples:
         "hours": args.hours,
         "min_stars": args.min_stars,
         "cooldown_s": get_github_trending_cooldown_seconds(),
+        "calls_total": trending_result["queries_total"],
+        "calls_ok": trending_result["queries_ok"],
+        "calls_kind": "queries",
+        "items_total": len(repos),
+        "queries_total": trending_result["queries_total"],
+        "queries_ok": trending_result["queries_ok"],
+        "query_stats": trending_result["query_stats"],
         "total": len(repos),
         "repos": repos,
     }

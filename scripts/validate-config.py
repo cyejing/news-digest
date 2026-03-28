@@ -13,7 +13,6 @@ import json
 import argparse
 import logging
 import sys
-import os
 from pathlib import Path
 from typing import Dict, Any, Set
 
@@ -217,7 +216,6 @@ def main():
 Examples:
     python3 validate-config.py
     python3 validate-config.py --defaults config/defaults --config workspace/config --verbose
-    python3 validate-config.py --config workspace/config --verbose  # backward compatibility
     """
     )
     
@@ -261,14 +259,8 @@ Examples:
         logger.info(f"Validating default configuration: {args.defaults}")
     
     try:
-        # Backward compatibility: if only --config provided, use old behavior
-        if args.config and args.defaults == Path("config/defaults") and not args.defaults.exists():
-            logger.debug("Backward compatibility mode: using --config as sole source")
-            defaults_dir = args.config
-            config_dir = None
-        else:
-            defaults_dir = args.defaults
-            config_dir = args.config
+        defaults_dir = args.defaults
+        config_dir = args.config
         
         # Load schema
         schema = load_json_file(schema_path)

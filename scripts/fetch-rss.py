@@ -465,11 +465,12 @@ def fetch_feed_with_retry(source: Dict[str, Any], cutoff: datetime, no_cache: bo
                 "url": url,
                 "priority": priority,
                 "topics": topics,
-                "status": "ok",
-                "attempts": attempt + 1,
-                "count": len(articles),
-                "articles": articles,
-            }
+                        "status": "ok",
+                        "attempts": attempt + 1,
+                        "items": len(articles),
+                        "count": len(articles),
+                        "articles": articles,
+                    }
             
         except Exception as e:
             error_msg = str(e)[:100]
@@ -489,6 +490,7 @@ def fetch_feed_with_retry(source: Dict[str, Any], cutoff: datetime, no_cache: bo
                     "status": "error",
                     "attempts": attempt + 1,
                     "error": error_msg,
+                    "items": 0,
                     "count": 0,
                     "articles": [],
                 }
@@ -528,7 +530,6 @@ def main():
 Examples:
     python3 fetch-rss.py
     python3 fetch-rss.py --defaults config/defaults --config workspace/config --hours 48 -o results.json
-    python3 fetch-rss.py --config workspace/config --verbose  # backward compatibility
         """
     )
     
@@ -600,12 +601,7 @@ Examples:
     try:
         cutoff = datetime.now(timezone.utc) - timedelta(hours=args.hours)
         
-        # Backward compatibility: if only --config provided, use old behavior
-        if args.config and args.defaults == Path("config/defaults") and not args.defaults.exists():
-            logger.debug("Backward compatibility mode: using --config as sole source")
-            sources = load_sources(args.config, None)
-        else:
-            sources = load_sources(args.defaults, args.config)
+        sources = load_sources(args.defaults, args.config)
         
         if not sources:
             logger.warning("No RSS sources found or all disabled")
@@ -651,6 +647,10 @@ Examples:
             "config_dir": str(args.config) if args.config else None,
             "hours": args.hours,
             "feedparser_available": HAS_FEEDPARSER,
+            "calls_total": len(results),
+            "calls_ok": ok_count,
+            "calls_kind": "sources",
+            "items_total": total_articles,
             "sources_total": len(results),
             "sources_ok": ok_count,
             "total_articles": total_articles,
