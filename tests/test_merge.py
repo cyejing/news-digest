@@ -7,7 +7,9 @@ Run: python3 -m pytest tests/ -v
 
 import json
 import sys
+import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).parent.parent / "scripts"
@@ -27,6 +29,9 @@ deduplicate_articles = merge_mod.deduplicate_articles
 apply_domain_limits = merge_mod.apply_domain_limits
 group_by_topics = merge_mod.group_by_topics
 DOMAIN_LIMIT_EXEMPT = merge_mod.DOMAIN_LIMIT_EXEMPT
+calculate_v2ex_replies_bonus = merge_mod.calculate_v2ex_replies_bonus
+calculate_recency_bonus = merge_mod.calculate_recency_bonus
+load_previous_digests = merge_mod.load_previous_digests
 
 
 def load_fixture(name):
@@ -62,6 +67,14 @@ class TestTitleSimilarity(unittest.TestCase):
         sim = calculate_title_similarity("Short", "This is a much much longer title")
         self.assertLess(sim, 0.5)
 
+    def test_chinese_similar(self):
+        sim = calculate_title_similarity("OpenAI 发布 GPT-5 新模型", "OpenAI发布GPT5新模型")
+        self.assertGreater(sim, 0.85)
+
+    def test_mixed_language_similar(self):
+        sim = calculate_title_similarity("Claude 4 API 发布", "Anthropic Claude-4 API正式发布")
+        self.assertGreater(sim, 0.75)
+
 
 class TestURLDedup(unittest.TestCase):
     def test_strips_query(self):
@@ -83,30 +96,54 @@ class TestURLDedup(unittest.TestCase):
 class TestDeduplication(unittest.TestCase):
     def test_removes_url_duplicates(self):
         articles = [
-            {"title": "Article A", "link": "https://example.com/a?ref=rss", "topics": ["llm"]},
-            {"title": "Article A from RSS", "link": "https://example.com/a?ref=twitter", "topics": ["llm"]},
-            {"title": "Article B", "link": "https://example.com/b", "topics": ["llm"]},
+            {"title": "Article A", "link": "https://example.com/a?ref=rss", "topics": ["ai-models"]},
+            {"title": "Article A from RSS", "link": "https://example.com/a?ref=twitter", "topics": ["ai-models"]},
+            {"title": "Article B", "link": "https://example.com/b", "topics": ["ai-models"]},
         ]
         result = deduplicate_articles(articles)
         self.assertEqual(len(result), 2)
 
     def test_removes_title_duplicates(self):
         articles = [
-            {"title": "OpenAI releases GPT-5", "link": "https://a.com/1", "topics": ["llm"]},
-            {"title": "OpenAI releases GPT-5!", "link": "https://b.com/2", "topics": ["llm"]},
-            {"title": "Completely different article", "link": "https://c.com/3", "topics": ["llm"]},
+            {"title": "OpenAI releases GPT-5", "link": "https://a.com/1", "topics": ["ai-models"]},
+            {"title": "OpenAI releases GPT-5!", "link": "https://b.com/2", "topics": ["ai-models"]},
+            {"title": "Completely different article", "link": "https://c.com/3", "topics": ["ai-models"]},
         ]
         result = deduplicate_articles(articles)
         self.assertEqual(len(result), 2)
 
     def test_keeps_different_articles(self):
         articles = [
-            {"title": "Python 3.12 released", "link": "https://a.com/1", "topics": ["llm"]},
-            {"title": "Rust 1.75 announced", "link": "https://b.com/2", "topics": ["llm"]},
-            {"title": "Go 1.22 is out", "link": "https://c.com/3", "topics": ["llm"]},
+            {"title": "Python 3.12 released", "link": "https://a.com/1", "topics": ["ai-models"]},
+            {"title": "Rust 1.75 announced", "link": "https://b.com/2", "topics": ["ai-models"]},
+            {"title": "Go 1.22 is out", "link": "https://c.com/3", "topics": ["ai-models"]},
         ]
         result = deduplicate_articles(articles)
         self.assertEqual(len(result), 3)
+
+    def test_prefers_highest_final_score_in_duplicate_cluster(self):
+        articles = [
+            {
+                "title": "OpenAI releases GPT-5",
+                "link": "https://a.com/1",
+                "topics": ["ai-models"],
+                "source_type": "rss",
+                "source_priority": 3,
+            },
+            {
+                "title": "OpenAI releases GPT-5 model",
+                "link": "https://b.com/2",
+                "topics": ["ai-models"],
+                "source_type": "twitter",
+                "source_priority": 5,
+                "metrics": {"like_count": 2000, "retweet_count": 800},
+            },
+        ]
+        result = deduplicate_articles(articles)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["source_type"], "twitter")
+        self.assertIn("score_breakdown", result[0])
+        self.assertIn("final_score", result[0])
 
 
 class TestDomainLimits(unittest.TestCase):
@@ -139,24 +176,24 @@ class TestGroupByTopics(unittest.TestCase):
     def test_groups_correctly(self):
         """Test that articles are assigned to their highest-priority topic only."""
         articles = [
-            {"title": "A", "topics": ["llm", "ai-agent"]},
-            {"title": "B", "topics": ["crypto"]},
-            {"title": "C", "topics": ["llm"]},
+            {"title": "A", "topics": ["ai-models", "ai-agents"]},
+            {"title": "B", "topics": ["ai-ecosystem"]},
+            {"title": "C", "topics": ["ai-models"]},
         ]
         groups = group_by_topics(articles)
         
-        # Article A should ONLY be in 'llm' (higher priority), not 'ai-agent'
+        # Article A should ONLY be in 'ai-models' (higher priority), not 'ai-agents'
         # This is the fix: each article appears in only ONE topic
-        self.assertEqual(len(groups["llm"]), 2)  # Articles A and C
-        self.assertEqual(len(groups["crypto"]), 1)  # Article B
+        self.assertEqual(len(groups["ai-models"]), 2)  # Articles A and C
+        self.assertEqual(len(groups["ai-ecosystem"]), 1)  # Article B
         
-        # Article A should have primary_topic='llm' and all_topics preserved
-        article_a = next(a for a in groups["llm"] if a["title"] == "A")
-        self.assertEqual(article_a["primary_topic"], "llm")
-        self.assertEqual(article_a["all_topics"], ["llm", "ai-agent"])
+        # Article A should have primary_topic='ai-models' and all_topics preserved
+        article_a = next(a for a in groups["ai-models"] if a["title"] == "A")
+        self.assertEqual(article_a["primary_topic"], "ai-models")
+        self.assertEqual(article_a["all_topics"], ["ai-models", "ai-agents"])
         
-        # ai-agent topic should NOT exist since all its articles went to llm
-        self.assertNotIn("ai-agent", groups)
+        # ai-agents topic should NOT exist since all its articles went to ai-models
+        self.assertNotIn("ai-agents", groups)
 
     def test_no_topics_goes_uncategorized(self):
         articles = [{"title": "A", "topics": []}, {"title": "B"}]
@@ -166,19 +203,30 @@ class TestGroupByTopics(unittest.TestCase):
     def test_cross_topic_deduplication(self):
         """Test that duplicate titles across topics are removed."""
         articles = [
-            {"title": "Same Article", "topics": ["llm", "ai-agent"], "quality_score": 10},
-            {"title": "Same Article", "topics": ["ai-agent"], "quality_score": 8},
-            {"title": "Different Article", "topics": ["crypto"], "quality_score": 5},
+            {"title": "Same Article", "topics": ["ai-models", "ai-agents"], "quality_score": 10},
+            {"title": "Same Article", "topics": ["ai-agents"], "quality_score": 8},
+            {"title": "Different Article", "topics": ["ai-ecosystem"], "quality_score": 5},
         ]
         groups = group_by_topics(articles)
         
-        # Should have only 2 articles total (1 in llm, 1 in crypto)
+        # Should have only 2 articles total (1 in ai-models, 1 in ai-ecosystem)
         total = sum(len(articles) for articles in groups.values())
         self.assertEqual(total, 2)
         
-        # "Same Article" should be in llm with score 10
-        self.assertEqual(len(groups["llm"]), 1)
-        self.assertEqual(groups["llm"][0]["quality_score"], 10)
+        # "Same Article" should be in ai-models with score 10
+        self.assertEqual(len(groups["ai-models"]), 1)
+        self.assertEqual(groups["ai-models"][0]["quality_score"], 10)
+
+    def test_topic_diversity_rerank_prefers_different_sources_early(self):
+        articles = [
+            {"title": "A1", "topics": ["ai-models"], "source_type": "twitter", "final_score": 10, "quality_score": 10, "link": "https://x.com/1"},
+            {"title": "A2", "topics": ["ai-models"], "source_type": "twitter", "final_score": 9, "quality_score": 9, "link": "https://x.com/2"},
+            {"title": "B1", "topics": ["ai-models"], "source_type": "rss", "final_score": 8.8, "quality_score": 8.8, "link": "https://example.com/1"},
+        ]
+        groups = group_by_topics(articles)
+        ordered = groups["ai-models"]
+        self.assertEqual(ordered[0]["source_type"], "twitter")
+        self.assertEqual(ordered[1]["source_type"], "rss")
 
 
 class TestFixtureData(unittest.TestCase):
@@ -191,6 +239,32 @@ class TestFixtureData(unittest.TestCase):
             for a in s.get("articles", []):
                 self.assertIn("title", a)
                 self.assertIn("link", a)
+
+
+class TestV2EXScoring(unittest.TestCase):
+    def test_reply_bonus_thresholds(self):
+        self.assertEqual(calculate_v2ex_replies_bonus(10), 0)
+        self.assertEqual(calculate_v2ex_replies_bonus(25), 1)
+        self.assertEqual(calculate_v2ex_replies_bonus(60), 2)
+        self.assertEqual(calculate_v2ex_replies_bonus(120), 3)
+        self.assertEqual(calculate_v2ex_replies_bonus(250), 5)
+
+
+class TestHistoryPenalty(unittest.TestCase):
+    def test_history_similarity_penalizes_but_keeps_article(self):
+        articles = [
+            {
+                "title": "OpenAI releases GPT-5 model",
+                "link": "https://example.com/openai-gpt5",
+                "topics": ["ai-models"],
+                "source_type": "rss",
+                "source_priority": 3,
+            }
+        ]
+        result = deduplicate_articles(articles, previous_titles=["OpenAI releases GPT5 model"])
+        self.assertEqual(len(result), 1)
+        self.assertLess(result[0]["score_breakdown"]["history_penalty"], 0)
+        self.assertGreater(result[0]["similarity_debug"]["best_history_similarity"], 0.88)
 
     def test_twitter_fixture(self):
         data = load_fixture("twitter")
@@ -213,12 +287,45 @@ class TestFixtureData(unittest.TestCase):
                 self.assertIn("title", a)
                 self.assertIn("link", a)
 
-    def test_web_fixture(self):
-        data = load_fixture("web")
+    def test_google_fixture(self):
+        data = load_fixture("google")
         for t in data["topics"]:
             for a in t.get("articles", []):
                 self.assertIn("title", a)
                 self.assertIn("link", a)
+
+
+class TestDateHandling(unittest.TestCase):
+    def test_recency_bonus_accepts_naive_iso_datetime(self):
+        naive_date = (
+            datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=2)
+        ).replace(microsecond=0).isoformat()
+        bonus = calculate_recency_bonus({"date": naive_date})
+        self.assertGreaterEqual(bonus, 1.0)
+
+    def test_load_previous_digests_uses_timezone_safe_cutoff(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            archive_dir = Path(tmpdir)
+            recent_name = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+            payload = {
+                "topics": [
+                    {
+                        "id": "technology",
+                        "items": [
+                            {
+                                "title": "Recent Story",
+                                "link": "https://example.com/recent",
+                            }
+                        ],
+                    }
+                ]
+            }
+            (archive_dir / f"daily-{recent_name}.json").write_text(
+                json.dumps(payload),
+                encoding="utf-8",
+            )
+            titles = load_previous_digests(archive_dir, days=14)
+            self.assertIn("Recent Story", titles)
 
 
 class TestIntegration(unittest.TestCase):
@@ -238,11 +345,11 @@ class TestIntegration(unittest.TestCase):
                     a["source_type"] = name
                     a.setdefault("topics", [])
                     all_articles.append(a)
-        # Web has topics[].articles[]
-        web = load_fixture("web")
-        for topic in web.get("topics", []):
+        # Google has topics[].articles[]
+        google = load_fixture("google")
+        for topic in google.get("topics", []):
             for a in topic.get("articles", []):
-                a["source_type"] = "web"
+                a["source_type"] = "google"
                 a.setdefault("topics", [])
                 all_articles.append(a)
         return all_articles

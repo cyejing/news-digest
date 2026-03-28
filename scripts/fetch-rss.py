@@ -17,6 +17,7 @@ import argparse
 import logging
 import time
 import tempfile
+from html import unescape
 from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.request import urlopen, Request, build_opener, HTTPRedirectHandler
@@ -25,21 +26,34 @@ from urllib.parse import urljoin, urlparse
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 import threading
+from xml.etree import ElementTree as ET
+from email.utils import parsedate_to_datetime
 
-# Try to import feedparser, fall back to regex parsing
+
+def normalize_priority(priority: Any, default: int = 3) -> int:
+    """Normalize source priority into a 1-10 score."""
+    if isinstance(priority, bool):
+        return 8 if priority else default
+    try:
+        value = int(priority)
+    except (TypeError, ValueError):
+        return default
+    return max(1, min(10, value))
+
+# Try to import feedparser, fall back to XML parsing
 try:
     import feedparser
     HAS_FEEDPARSER = True
 except ImportError:
     HAS_FEEDPARSER = False
-    logging.warning("feedparser not installed — using basic XML regex parser (may miss some feeds). Install with: pip install feedparser")
+    logging.warning("feedparser not installed — using XML fallback parser. Install with: pip install feedparser")
 
-TIMEOUT = 30
+TIMEOUT = 60
 MAX_WORKERS = 10  
 MAX_ARTICLES_PER_FEED = 20
 RETRY_COUNT = 1
 RETRY_DELAY = 2.0  # seconds
-RSS_CACHE_PATH = "/tmp/tech-news-digest-rss-cache.json"
+RSS_CACHE_PATH = "/tmp/news-digest-rss-cache.json"
 RSS_CACHE_TTL_HOURS = 24
 
 
@@ -77,6 +91,14 @@ def parse_date_regex(s: str) -> Optional[datetime]:
     if not s:
         return None
     s = s.strip()
+
+    try:
+        dt = parsedate_to_datetime(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except (TypeError, ValueError, IndexError, OverflowError):
+        pass
     
     # Common date formats
     formats = [
@@ -115,13 +137,73 @@ def extract_cdata(text: str) -> str:
 
 def strip_tags(html: str) -> str:
     """Remove HTML tags from text."""
-    return re.sub(r"<[^>]+>", "", html).strip()
+    return unescape(re.sub(r"<[^>]+>", "", html)).strip()
 
 
-def get_tag(xml: str, tag: str) -> str:
-    """Extract content from XML tag using regex."""
-    m = re.search(rf"<{tag}[^>]*>(.*?)</{tag}>", xml, re.DOTALL | re.IGNORECASE)
-    return extract_cdata(m.group(1)).strip() if m else ""
+def _xml_local_name(tag: str) -> str:
+    """Return the local element name without namespace."""
+    if "}" in tag:
+        return tag.rsplit("}", 1)[-1]
+    if ":" in tag:
+        return tag.rsplit(":", 1)[-1]
+    return tag
+
+
+def _xml_child_elements(parent: ET.Element, local_name: str) -> List[ET.Element]:
+    """Return direct child elements matching a local tag name."""
+    return [child for child in list(parent) if _xml_local_name(child.tag) == local_name]
+
+
+def _xml_first_child(parent: ET.Element, *local_names: str) -> Optional[ET.Element]:
+    """Return the first direct child whose local name matches."""
+    for child in list(parent):
+        if _xml_local_name(child.tag) in local_names:
+            return child
+    return None
+
+
+def _xml_find_descendant(parent: ET.Element, *local_names: str) -> Optional[ET.Element]:
+    """Return the first descendant whose local name matches."""
+    wanted = set(local_names)
+    for child in parent.iter():
+        if child is parent:
+            continue
+        if _xml_local_name(child.tag) in wanted:
+            return child
+    return None
+
+
+def _xml_element_text(element: Optional[ET.Element]) -> str:
+    """Extract readable text from an XML element."""
+    if element is None:
+        return ""
+    text = "".join(element.itertext()).strip()
+    return strip_tags(extract_cdata(text))
+
+
+def _extract_atom_link(entry: ET.Element, feed_url: str) -> str:
+    """Extract the most useful Atom entry link."""
+    links = _xml_child_elements(entry, "link")
+    for link_el in links:
+        rel = link_el.attrib.get("rel", "alternate")
+        href = link_el.attrib.get("href", "").strip()
+        if href and rel in ("alternate", ""):
+            return resolve_link(href, feed_url)
+    for link_el in links:
+        href = link_el.attrib.get("href", "").strip()
+        if href:
+            return resolve_link(href, feed_url)
+    fallback = _xml_first_child(entry, "link")
+    return resolve_link(_xml_element_text(fallback), feed_url)
+
+
+def is_probably_feed(content: str, content_type: str = "") -> bool:
+    """Heuristic check for RSS/Atom/RDF feed responses."""
+    text = content.lstrip().lower()
+    ctype = content_type.lower()
+    if "xml" in ctype or "atom" in ctype or "rss" in ctype:
+        return True
+    return any(marker in text for marker in ("<rss", "<feed", "<rdf:rdf", "<rdf"))
 
 
 def validate_article_domain(article_link: str, source: Dict[str, Any]) -> bool:
@@ -194,17 +276,50 @@ def parse_feed_feedparser(content: str, cutoff: datetime, feed_url: str) -> List
     return articles
 
 
-def parse_feed_regex(content: str, cutoff: datetime, feed_url: str) -> List[Dict[str, Any]]:
-    """Parse feed using regex patterns (fallback method)."""
+def parse_feed_xml(content: str, cutoff: datetime, feed_url: str) -> List[Dict[str, Any]]:
+    """Parse feed using XML parsing as a general fallback."""
     articles = []
+    try:
+        root = ET.fromstring(content)
+    except ET.ParseError as e:
+        logging.debug(f"XML fallback parsing failed: {e}")
+        return articles
 
-    # RSS 2.0 items
-    for item in re.finditer(r"<item[^>]*>(.*?)</item>", content, re.DOTALL):
-        block = item.group(1)
-        title = strip_tags(get_tag(block, "title"))
-        link = resolve_link(get_tag(block, "link"), feed_url)
-        date_str = get_tag(block, "pubDate") or get_tag(block, "dc:date")
-        pub = parse_date_regex(date_str)
+    root_name = _xml_local_name(root.tag)
+    item_nodes: List[ET.Element] = []
+    atom_mode = False
+
+    if root_name == "rss":
+        channel = _xml_first_child(root, "channel")
+        item_nodes = _xml_child_elements(channel, "item") if channel is not None else []
+    elif root_name == "feed":
+        atom_mode = True
+        item_nodes = _xml_child_elements(root, "entry")
+    elif root_name == "RDF":
+        item_nodes = [child for child in list(root) if _xml_local_name(child.tag) == "item"]
+    else:
+        entry_nodes = [child for child in list(root) if _xml_local_name(child.tag) == "entry"]
+        item_nodes = [child for child in list(root) if _xml_local_name(child.tag) == "item"]
+        if entry_nodes:
+            atom_mode = True
+            item_nodes = entry_nodes
+
+    for item in item_nodes[:MAX_ARTICLES_PER_FEED]:
+        if atom_mode:
+            title = _xml_element_text(_xml_first_child(item, "title"))
+            link = _extract_atom_link(item, feed_url)
+            date_el = _xml_first_child(item, "updated", "published")
+            pub = parse_date_regex(_xml_element_text(date_el))
+        else:
+            title = _xml_element_text(_xml_first_child(item, "title"))
+            link = resolve_link(
+                _xml_element_text(_xml_first_child(item, "link")),
+                feed_url,
+            )
+            date_el = _xml_first_child(item, "pubDate", "date", "published", "updated")
+            if date_el is None:
+                date_el = _xml_find_descendant(item, "date")
+            pub = parse_date_regex(_xml_element_text(date_el))
 
         if title and link and pub and pub >= cutoff:
             articles.append({
@@ -212,27 +327,6 @@ def parse_feed_regex(content: str, cutoff: datetime, feed_url: str) -> List[Dict
                 "link": link,
                 "date": pub.isoformat(),
             })
-
-    # Atom entries fallback
-    if not articles:
-        for entry in re.finditer(r"<entry[^>]*>(.*?)</entry>", content, re.DOTALL):
-            block = entry.group(1)
-            title = strip_tags(get_tag(block, "title"))
-            link_m = re.search(r'<link[^>]*href=["\']([^"\']+)["\']', block)
-            if not link_m:
-                link = get_tag(block, "link")
-            else:
-                link = link_m.group(1)
-            link = resolve_link(link, feed_url)
-            date_str = get_tag(block, "updated") or get_tag(block, "published")
-            pub = parse_date_regex(date_str)
-
-            if title and link and pub and pub >= cutoff:
-                articles.append({
-                    "title": title[:200],
-                    "link": link,
-                    "date": pub.isoformat(),
-                })
 
     return articles[:MAX_ARTICLES_PER_FEED]
 
@@ -243,9 +337,12 @@ def parse_feed(content: str, cutoff: datetime, feed_url: str) -> List[Dict[str, 
         articles = parse_feed_feedparser(content, cutoff, feed_url)
         if articles:
             return articles
-        logging.debug("feedparser returned no articles, trying regex fallback")
-        
-    return parse_feed_regex(content, cutoff, feed_url)
+        logging.debug("feedparser returned no articles, trying XML fallback")
+
+    if not is_probably_feed(content):
+        return []
+
+    return parse_feed_xml(content, cutoff, feed_url)
 
 
 def _load_rss_cache() -> Dict[str, Any]:
@@ -294,7 +391,7 @@ def fetch_feed_with_retry(source: Dict[str, Any], cutoff: datetime, no_cache: bo
     source_id = source["id"]
     name = source["name"]
     url = source["url"]
-    priority = source["priority"]
+    priority = normalize_priority(source.get("priority"))
     topics = source["topics"]
     
     global _rss_cache, _rss_cache_dirty
@@ -423,7 +520,7 @@ def load_sources(defaults_dir: Path, config_dir: Optional[Path] = None) -> List[
 def main():
     """Main RSS fetching function."""
     parser = argparse.ArgumentParser(
-        description="Parallel RSS/Atom feed fetcher for tech-news-digest. "
+        description="Parallel RSS/Atom feed fetcher for news-digest. "
                    "Fetches enabled RSS sources from unified configuration, "
                    "filters by time window, and outputs structured article data.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -496,7 +593,7 @@ Examples:
     
     # Auto-generate unique output path if not specified
     if not args.output:
-        fd, temp_path = tempfile.mkstemp(prefix="tech-news-digest-rss-", suffix=".json")
+        fd, temp_path = tempfile.mkstemp(prefix="news-digest-rss-", suffix=".json")
         os.close(fd)
         args.output = Path(temp_path)
     
@@ -519,7 +616,7 @@ Examples:
         if HAS_FEEDPARSER:
             logger.debug("Using feedparser library for parsing")
         else:
-            logger.info("feedparser not available, using regex parsing")
+            logger.info("feedparser not available, using XML fallback parsing")
         
         # Initialize cache
         _get_rss_cache(no_cache=args.no_cache)
@@ -541,8 +638,8 @@ Examples:
         # Flush conditional request cache
         _flush_rss_cache()
         
-        # Sort: priority first, then by article count
-        results.sort(key=lambda x: (not x.get("priority", False), -x.get("count", 0)))
+        # Sort: higher priority first, then by article count
+        results.sort(key=lambda x: (-normalize_priority(x.get("priority")), -x.get("count", 0)))
 
         ok_count = sum(1 for r in results if r["status"] == "ok")
         total_articles = sum(r.get("count", 0) for r in results)

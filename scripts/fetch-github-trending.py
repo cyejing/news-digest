@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-GitHub Trending 仓库抓取脚本 - 用于 tech-news-digest 技能。
+GitHub Trending 仓库抓取脚本 - 用于 news-digest 技能。
 
 通过 GitHub Search API 抓取热门仓库，支持从 topics.json 配置文件加载查询。
 按星标数排序，估算每日星标增长率。
@@ -42,8 +42,8 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
 # ==================== 常量配置 ====================
-TIMEOUT = 30  # 请求超时时间（秒）
-USER_AGENT = "TechDigest/3.0 (bot; +https://github.com/draco-agent/tech-news-digest)"
+TIMEOUT = 60  # 请求超时时间（秒）
+USER_AGENT = "NewsDigest/3.0 (bot; +https://github.com/cyejing/news-digest)"
 
 
 def setup_logging(verbose: bool = False) -> logging.Logger:
@@ -172,16 +172,16 @@ def load_github_trending_queries(defaults_dir: Path, config_dir: Optional[Path] 
     queries = []
     
     for topic in topics:
-        topic_id = topic.get("id")
+        if topic.get("id") != "github":
+            continue
         search_config = topic.get("search", {})
         github_query = search_config.get("github_query")
-        
         if github_query:
             queries.append({
-                "topic": topic_id,
+                "topic": "github",
                 "q": github_query
             })
-    
+
     logging.info(f"从配置加载了 {len(queries)} 个 GitHub Trending 查询")
     return queries
 
@@ -225,10 +225,7 @@ def fetch_trending_repos(hours: int = 48, github_token: Optional[str] = None,
     else:
         # 回退到硬编码查询（向后兼容）
         trending_queries = [
-            {"topic": "llm", "q": "llm large-language-model in:topics,name,description"},
-            {"topic": "ai-agent", "q": "ai-agent autonomous-agent in:topics,name,description"},
-            {"topic": "crypto", "q": "blockchain ethereum solidity defi in:topics,name,description"},
-            {"topic": "frontier-tech", "q": "machine-learning deep-learning in:topics,name,description"},
+            {"topic": "github", "q": "open-source developer tooling ai infrastructure in:topics,name,description"},
         ]
     
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)

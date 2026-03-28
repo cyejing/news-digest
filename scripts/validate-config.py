@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Configuration validation script for tech-news-digest.
+Configuration validation script for news-digest.
 
 Validates sources.json and topics.json against JSON Schema and performs
 additional consistency checks.
@@ -16,6 +16,8 @@ import sys
 import os
 from pathlib import Path
 from typing import Dict, Any, Set
+
+SOURCE_TYPES = ("rss", "twitter", "github", "reddit")
 
 try:
     import jsonschema
@@ -47,6 +49,40 @@ def load_json_file(file_path: Path) -> Dict[str, Any]:
         raise ValueError(f"Invalid JSON in {file_path}: {e}")
 
 
+def flatten_sources_data(sources_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert grouped sources config into the flat format used by validators."""
+    grouped_sources = sources_data.get("sources", {})
+    if not isinstance(grouped_sources, dict):
+        raise ValueError("Invalid sources.json: expected 'sources' to be an object keyed by type")
+
+    flattened = []
+    for source_type, entries in grouped_sources.items():
+        if not isinstance(entries, list):
+            raise ValueError(
+                f"Invalid sources.json: expected '{source_type}' sources to be an array"
+            )
+        for entry in entries:
+            if not isinstance(entry, dict):
+                raise ValueError(
+                    f"Invalid sources.json: expected source entries under '{source_type}' to be objects"
+                )
+            normalized = entry.copy()
+            normalized["type"] = normalized.get("type", source_type)
+            flattened.append(normalized)
+    return {"sources": flattened}
+
+
+def group_sources_data(flat_sources: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert flat source list into grouped config shape for schema validation."""
+    grouped = {source_type: [] for source_type in SOURCE_TYPES}
+    for source in flat_sources.get("sources", []):
+        source_type = source.get("type")
+        if source_type not in grouped:
+            raise ValueError(f"Invalid source type in merged config: {source_type}")
+        grouped[source_type].append(source)
+    return {"sources": grouped}
+
+
 def validate_against_schema(data: Dict[str, Any], schema: Dict[str, Any], 
                           config_type: str) -> bool:
     """Validate data against JSON schema."""
@@ -58,24 +94,20 @@ def validate_against_schema(data: Dict[str, Any], schema: Dict[str, Any],
         # Extract the relevant schema definition
         if config_type == "sources":
             schema_def = {
+                "definitions": schema["definitions"],
                 "type": "object",
                 "required": ["sources"],
                 "properties": {
-                    "sources": {
-                        "type": "array", 
-                        "items": schema["definitions"]["source"]
-                    }
+                    "sources": schema["properties"]["sources"]
                 }
             }
         elif config_type == "topics":
             schema_def = {
+                "definitions": schema["definitions"],
                 "type": "object",
                 "required": ["topics"],
                 "properties": {
-                    "topics": {
-                        "type": "array",
-                        "items": schema["definitions"]["topic"]
-                    }
+                    "topics": schema["properties"]["topics"]
                 }
             }
         else:
@@ -101,8 +133,10 @@ def validate_sources_consistency(sources_data: Dict[str, Any],
     valid_topics = {topic["id"] for topic in topics_data["topics"]}
     logging.debug(f"Valid topic IDs: {valid_topics}")
     
+    flat_sources = flatten_sources_data(sources_data)["sources"]
+
     # Check source topic references
-    for source in sources_data["sources"]:
+    for source in flat_sources:
         source_id = source.get("id", "unknown")
         source_topics = set(source.get("topics", []))
         
@@ -116,7 +150,7 @@ def validate_sources_consistency(sources_data: Dict[str, Any],
             errors.append(f"Source '{source_id}' has no topics assigned")
             
     # Check for duplicate source IDs
-    source_ids = [source.get("id") for source in sources_data["sources"]]
+    source_ids = [source.get("id") for source in flat_sources]
     duplicates = {id for id in source_ids if source_ids.count(id) > 1}
     if duplicates:
         errors.append(f"Duplicate source IDs found: {duplicates}")
@@ -141,7 +175,9 @@ def validate_source_types(sources_data: Dict[str, Any]) -> bool:
     """Validate source-type specific requirements."""
     errors = []
     
-    for source in sources_data["sources"]:
+    flat_sources = flatten_sources_data(sources_data)["sources"]
+
+    for source in flat_sources:
         source_id = source.get("id", "unknown")
         source_type = source.get("type")
         
@@ -155,11 +191,10 @@ def validate_source_types(sources_data: Dict[str, Any]) -> bool:
             if not source.get("repo"):
                 errors.append(f"GitHub source '{source_id}' missing required 'repo' field")
         elif source_type == "reddit":
-            if not source.get("subreddit"):
-                errors.append(f"Reddit source '{source_id}' missing required 'subreddit' field")
-        elif source_type == "web":
-            # Web sources are handled by topics, no specific validation needed
-            pass
+            if not source.get("subreddit") and not source.get("query") and not source.get("search_query"):
+                errors.append(
+                    f"Reddit source '{source_id}' missing required 'subreddit' or 'query/search_query' field"
+                )
         else:
             errors.append(f"Source '{source_id}' has invalid type: {source_type}")
             
@@ -176,7 +211,7 @@ def validate_source_types(sources_data: Dict[str, Any]) -> bool:
 def main():
     """Main validation function."""
     parser = argparse.ArgumentParser(
-        description="Validate tech-news-digest configuration files",
+        description="Validate news-digest configuration files",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -242,9 +277,9 @@ Examples:
         # Load merged configuration data
         merged_sources = load_merged_sources(defaults_dir, config_dir)
         merged_topics = load_merged_topics(defaults_dir, config_dir)
-        
+
         # Convert to the format expected by validation functions
-        sources_data = {"sources": merged_sources}
+        sources_data = group_sources_data({"sources": merged_sources})
         topics_data = {"topics": merged_topics}
         
         logger.debug(f"Loaded {len(merged_sources)} merged sources, {len(merged_topics)} merged topics")

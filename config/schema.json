@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Tech Digest Configuration Schema",
-  "version": "2.5.0",
+  "version": "2.6.0",
   "definitions": {
     "source": {
       "type": "object",
@@ -13,7 +13,7 @@
         },
         "type": {
           "type": "string",
-          "enum": ["rss", "twitter", "web", "github", "reddit"],
+          "enum": ["rss", "twitter", "github", "reddit"],
           "description": "Source type"
         },
         "name": {
@@ -25,8 +25,10 @@
           "description": "Whether this source is active"
         },
         "priority": {
-          "type": "boolean", 
-          "description": "High-priority sources are fetched first and scored higher"
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10,
+          "description": "Priority hint from 1-10. In practice, keep most sources near 3, use 4 for clearly authoritative sources, and reserve 5+ for a very small number of top-tier primary sources."
         },
         "topics": {
           "type": "array",
@@ -52,6 +54,10 @@
           "type": "string",
           "pattern": "^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$",
           "description": "GitHub repository in owner/repo format (required for type=github)"
+        },
+        "subreddit": {
+          "type": "string",
+          "description": "Subreddit name without r/ prefix (required for type=reddit)"
         }
       },
       "allOf": [
@@ -77,6 +83,14 @@
           },
           "then": {
             "required": ["repo"]
+          }
+        },
+        {
+          "if": {
+            "properties": { "type": { "const": "reddit" } }
+          },
+          "then": {
+            "required": ["subreddit"]
           }
         }
       ]
@@ -112,13 +126,6 @@
               },
               "description": "Search queries for web search"
             },
-            "must_include": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              },
-              "description": "Keywords that must be present"
-            },
             "exclude": {
               "type": "array",
               "items": {
@@ -145,30 +152,39 @@
           }
         }
       }
+    },
+    "sourceGroup": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/source"
+      }
     }
   },
   "type": "object",
   "properties": {
     "sources": {
       "type": "object",
+      "required": ["rss", "twitter", "github", "reddit"],
+      "additionalProperties": false,
       "properties": {
-        "sources": {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/source"
-          }
+        "rss": {
+          "$ref": "#/definitions/sourceGroup"
+        },
+        "twitter": {
+          "$ref": "#/definitions/sourceGroup"
+        },
+        "github": {
+          "$ref": "#/definitions/sourceGroup"
+        },
+        "reddit": {
+          "$ref": "#/definitions/sourceGroup"
         }
       }
     },
     "topics": {
-      "type": "object",
-      "properties": {
-        "topics": {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/topic"
-          }
-        }
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/topic"
       }
     }
   }

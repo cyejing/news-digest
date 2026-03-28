@@ -1,58 +1,58 @@
 {
-  "generated": "2026-02-27T12:03:51.145343+00:00",
+  "generated": "2026-03-28T04:40:30+00:00",
   "source_type": "twitter",
   "backend": "auto",
   "defaults_dir": "(redacted)",
   "config_dir": "(redacted)",
   "hours": 24,
-  "sources_total": 48,
-  "sources_ok": 48,
-  "total_articles": 78,
+  "sources_total": 3,
+  "sources_ok": 3,
+  "total_articles": 6,
   "sources": [
     {
-      "source_id": "wu-twitter",
+      "source_id": "elon-twitter",
       "source_type": "twitter",
-      "name": "Wu Blockchain",
-      "handle": "WuBlockchain",
-      "priority": true,
+      "name": "Elon Musk",
+      "handle": "elonmusk",
+      "priority": 8,
       "topics": [
-        "crypto"
+        "ai-ecosystem"
       ],
       "status": "ok",
       "attempts": 1,
-      "count": 17,
+      "count": 2,
       "articles": [
         {
-          "title": "According to Maeil Business News Korea, South Korea’s tax authority mistakenly published the recovery mnemonic for a seized crypto wallet in a press release photo, and soon after about $4.8 million worth of tokens were transferred out, raising concerns about a security lapse. ...",
-          "link": "https://x.com/WuBlockchain/status/2027353024167825617",
-          "date": "2026-02-27T12:00:02+00:00",
+          "title": "Optimus matters because robotics, AI and manufacturing improve together.",
+          "link": "https://x.com/elonmusk/status/2030010000000000001",
+          "date": "2026-03-28T03:50:00+00:00",
           "topics": [
-            "crypto"
+            "ai-ecosystem"
           ],
           "metrics": {
-            "like_count": 4,
-            "retweet_count": 1,
-            "reply_count": 2,
-            "quote_count": 1,
-            "impression_count": 719
+            "like_count": 15420,
+            "retweet_count": 1820,
+            "reply_count": 4100,
+            "quote_count": 520,
+            "impression_count": 2480000
           },
-          "tweet_id": "2027353024167825617"
+          "tweet_id": "2030010000000000001"
         },
         {
-          "title": "Minnesota HF3642 (2025–2026) proposes a full ban on virtual currency kiosks in the state, prohibiting any person from placing or operating a crypto ATM in Minnesota. The bill would repeal existing statutes governing kiosk licensing, disclosures, transaction limits, refunds, an...",
-          "link": "https://x.com/WuBlockchain/status/2027344496912957740",
-          "date": "2026-02-27T11:26:08+00:00",
+          "title": "Starship, Tesla and xAI all compound on the same long-term bet: real-world intelligence at industrial scale.",
+          "link": "https://x.com/elonmusk/status/2030010000000000002",
+          "date": "2026-03-28T01:20:00+00:00",
           "topics": [
-            "crypto"
+            "ai-ecosystem"
           ],
           "metrics": {
-            "like_count": 16,
-            "retweet_count": 0,
-            "reply_count": 8,
-            "quote_count": 1,
-            "impression_count": 3302
+            "like_count": 9800,
+            "retweet_count": 1210,
+            "reply_count": 2600,
+            "quote_count": 310,
+            "impression_count": 1710000
           },
-          "tweet_id": "2027344496912957740"
+          "tweet_id": "2030010000000000002"
         }
       ]
     },
@@ -61,98 +61,98 @@
       "source_type": "twitter",
       "name": "Sam Altman (OpenAI CEO)",
       "handle": "sama",
-      "priority": true,
+      "priority": 8,
       "topics": [
-        "llm",
-        "ai-agent",
-        "frontier-tech"
+        "ai-models",
+        "ai-agents"
       ],
       "status": "ok",
       "attempts": 1,
-      "count": 3,
+      "count": 2,
       "articles": [
         {
-          "title": "We often get asked how people who are not technical can contribute to AGI. One area is research recruiting. Tifa (@tifafafafa) is looking for exceptional recruiters from non-traditional backgrounds, former founders especially. We believe the best research teams are built throu...",
-          "link": "https://x.com/sama/status/2027087700214591913",
-          "date": "2026-02-26T18:25:43+00:00",
+          "title": "Inference, tooling and product design now matter as much as raw model quality.",
+          "link": "https://x.com/sama/status/2030010000000000003",
+          "date": "2026-03-28T02:40:00+00:00",
           "topics": [
-            "llm",
-            "ai-agent",
-            "frontier-tech"
+            "ai-models",
+            "ai-agents"
           ],
           "metrics": {
-            "like_count": 4714,
-            "retweet_count": 234,
-            "reply_count": 1006,
-            "quote_count": 86,
-            "impression_count": 639577
+            "like_count": 6400,
+            "retweet_count": 510,
+            "reply_count": 1300,
+            "quote_count": 120,
+            "impression_count": 910000
           },
-          "tweet_id": "2027087700214591913"
+          "tweet_id": "2030010000000000003"
         },
         {
-          "title": "Thank you and will work hard to continue to earn your tokens!",
-          "link": "https://x.com/sama/status/2027087689359753483",
-          "date": "2026-02-26T18:25:41+00:00",
+          "title": "Agentic workflows are getting good enough to reshape how teams operate.",
+          "link": "https://x.com/sama/status/2030010000000000004",
+          "date": "2026-03-27T22:10:00+00:00",
           "topics": [
-            "llm",
-            "ai-agent",
-            "frontier-tech"
+            "ai-models",
+            "ai-agents"
           ],
           "metrics": {
-            "like_count": 2290,
-            "retweet_count": 58,
-            "reply_count": 354,
-            "quote_count": 18,
-            "impression_count": 307826
+            "like_count": 5200,
+            "retweet_count": 430,
+            "reply_count": 980,
+            "quote_count": 88,
+            "impression_count": 760000
           },
-          "tweet_id": "2027087689359753483"
+          "tweet_id": "2030010000000000004"
         }
       ]
     },
     {
-      "source_id": "cz-twitter",
+      "source_id": "jimfan-twitter",
       "source_type": "twitter",
-      "name": "CZ (Binance)",
-      "handle": "cz_binance",
-      "priority": true,
+      "name": "Jim Fan (NVIDIA)",
+      "handle": "DrJimFan",
+      "priority": 8,
       "topics": [
-        "crypto"
+        "ai-ecosystem",
+        "technology"
       ],
       "status": "ok",
       "attempts": 1,
-      "count": 3,
+      "count": 2,
       "articles": [
         {
-          "title": "Reality: Learn to use AI to the max, or be laid off.",
-          "link": "https://x.com/cz_binance/status/2027235469675663603",
-          "date": "2026-02-27T04:12:54+00:00",
+          "title": "Generalist robotics needs better world models, stronger simulation and a lot more GPU horsepower.",
+          "link": "https://x.com/DrJimFan/status/2030010000000000005",
+          "date": "2026-03-28T00:35:00+00:00",
           "topics": [
-            "crypto"
+            "ai-ecosystem",
+            "technology"
           ],
           "metrics": {
-            "like_count": 5614,
-            "retweet_count": 630,
-            "reply_count": 953,
-            "quote_count": 186,
-            "impression_count": 499175
+            "like_count": 4300,
+            "retweet_count": 380,
+            "reply_count": 410,
+            "quote_count": 70,
+            "impression_count": 520000
           },
-          "tweet_id": "2027235469675663603"
+          "tweet_id": "2030010000000000005"
         },
         {
-          "title": "👏",
-          "link": "https://x.com/cz_binance/status/2027114401015431335",
-          "date": "2026-02-26T20:11:49+00:00",
+          "title": "Humanoid robotics is turning into a full-stack systems challenge across chips, data and control.",
+          "link": "https://x.com/DrJimFan/status/2030010000000000006",
+          "date": "2026-03-27T21:45:00+00:00",
           "topics": [
-            "crypto"
+            "ai-ecosystem",
+            "technology"
           ],
           "metrics": {
-            "like_count": 880,
-            "retweet_count": 98,
-            "reply_count": 275,
-            "quote_count": 9,
-            "impression_count": 165152
+            "like_count": 3900,
+            "retweet_count": 340,
+            "reply_count": 290,
+            "quote_count": 62,
+            "impression_count": 460000
           },
-          "tweet_id": "2027114401015431335"
+          "tweet_id": "2030010000000000006"
         }
       ]
     }

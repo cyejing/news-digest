@@ -1,7 +1,7 @@
 [project]
-name = "tech-news-digest"
-version = "3.16.0"
-description = "Automated tech news digest system with unified data sources, quality scoring, and multi-format output"
+name = "news-digest"
+version = "3.18.0"
+description = "Automated news digest system with unified data sources, quality scoring, and markdown output"
 readme = "README.md"
 requires-python = ">=3.8"
 dependencies = [
@@ -9,10 +9,8 @@ dependencies = [
     "jsonschema>=4.0.0",
     "requests>=2.28.0",
     "beautifulsoup4>=4.12.0",
+    "rapidfuzz>=3.9.0",
 ]
-
-[project.optional-dependencies]
-pdf = ["weasyprint>=60.0"]
 
 [tool.uv]
 dev-dependencies = []

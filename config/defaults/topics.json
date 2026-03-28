@@ -1,19 +1,30 @@
 {
   "_description": "Enhanced topic definitions for tech digest. Each topic defines a report section with search queries, filters, and display preferences.",
-  "_updated": "2026-03-26",
-  "_version": "3.0.0",
+  "_updated": "2026-03-28",
+  "_version": "4.1.0",
   "topics": [
     {
-      "id": "llm",
+      "id": "ai-models",
       "emoji": "🧠",
-      "label": "LLM / 大模型",
-      "description": "大语言模型、基础模型、模型发布、基准测试、生成式 AI 突破",
+      "label": "AI Models / 模型进展",
+      "description": "基础模型、大语言模型、模型发布、评测与核心能力演进",
       "search": {
-        "queries": ["LLM latest news", "large language model breakthroughs", "大模型最新动态", "GPT Claude Gemini updates"],
-        "twitter_queries": ["GPT-5", "Claude", "大模型"],
-        "github_query": "llm large-language-model in:topics,name,description",
-        "must_include": ["LLM", "large language model", "foundation model", "language model", "大模型"],
-        "exclude": ["tutorial", "how to use", "beginner guide"]
+        "queries": [
+          "foundation model release",
+          "LLM model update",
+          "GPT Claude Gemini release",
+          "大模型 发布 评测"
+        ],
+        "twitter_queries": [
+          "GPT-5",
+          "Claude",
+          "大模型"
+        ],
+        "github_query": "",
+        "exclude": [
+          "tutorial",
+          "beginner guide"
+        ]
       },
       "display": {
         "max_items": 8,
@@ -21,16 +32,27 @@
       }
     },
     {
-      "id": "ai-agent",
+      "id": "ai-agents",
       "emoji": "🤖",
-      "label": "AI Agent / 智能体",
-      "description": "自主智能体、Agent 框架、AI 助手、Agentic AI 系统",
+      "label": "AI Agents / 智能体",
+      "description": "智能体系统、Agent 框架、自动化工作流、Copilot 与 Agentic 应用",
       "search": {
-        "queries": ["AI Agent latest developments", "autonomous agent framework", "AI assistant breakthrough"],
-        "twitter_queries": ["AI agent", "autonomous agent", "AI 智能体"],
-        "github_query": "ai-agent autonomous-agent in:topics,name,description",
-        "must_include": ["AI agent", "autonomous agent", "agent framework", "agentic", "multi-agent"],
-        "exclude": ["game agent", "travel agent"]
+        "queries": [
+          "AI agent framework",
+          "agentic AI product launch",
+          "autonomous agent workflow",
+          "智能体 框架 自动化"
+        ],
+        "twitter_queries": [
+          "AI agent",
+          "autonomous agent",
+          "AI 智能体"
+        ],
+        "github_query": "",
+        "exclude": [
+          "travel agent",
+          "game agent"
+        ]
       },
       "display": {
         "max_items": 6,
@@ -38,16 +60,55 @@
       }
     },
     {
-      "id": "frontier-tech",
-      "emoji": "🔬",
-      "label": "Frontier Tech / 前沿科技",
-      "description": "前沿技术、研究突破、量子计算、生物技术、机器人、新兴技术",
+      "id": "ai-ecosystem",
+      "emoji": "🦾",
+      "label": "AI Ecosystem / AI 产业链",
+      "description": "AI 芯片、内存、算力、服务器、机器人、自动驾驶，以及 Tesla、SpaceX、xAI 等 AI 产业链动态",
       "search": {
-        "queries": ["artificial intelligence breakthroughs", "frontier technology latest", "quantum computing progress", "biotech breakthrough"],
-        "twitter_queries": ["AI breakthrough", "量子计算", "机器人"],
-        "github_query": "machine-learning deep-learning in:topics,name,description",
-        "must_include": ["breakthrough", "research", "technology", "innovation", "quantum", "biotech", "robotics"],
-        "exclude": ["rumor", "speculation", "unverified"]
+        "queries": [
+          "AI chip GPU semiconductor",
+          "AI infrastructure datacenter server memory",
+          "humanoid robot Tesla SpaceX",
+          "人工智能芯片 算力 机器人 特斯拉"
+        ],
+        "twitter_queries": [
+          "AI chip",
+          "Tesla",
+          "机器人"
+        ],
+        "github_query": "",
+        "exclude": [
+          "smartphone review",
+          "game review"
+        ]
+      },
+      "display": {
+        "max_items": 6,
+        "style": "compact"
+      }
+    },
+    {
+      "id": "technology",
+      "emoji": "🔬",
+      "label": "Technology / 科技动态",
+      "description": "广义科技、工程突破、科研进展与科技产业动态，不含已被 AI 细分主题覆盖的内容",
+      "search": {
+        "queries": [
+          "technology research breakthrough",
+          "science engineering breakthrough",
+          "emerging technology industry",
+          "科技 研究 突破 工程"
+        ],
+        "twitter_queries": [
+          "technology",
+          "科技",
+          "engineering"
+        ],
+        "github_query": "",
+        "exclude": [
+          "rumor",
+          "unverified"
+        ]
       },
       "display": {
         "max_items": 8,
@@ -55,16 +116,27 @@
       }
     },
     {
-      "id": "developer",
+      "id": "developer-tools",
       "emoji": "👨‍💻",
-      "label": "Developer / 开发者",
-      "description": "开发者社区、编程技术、开源项目、软件工程、技术讨论",
+      "label": "Developer Tools / 开发工具",
+      "description": "开发工具、开源基础设施、软件工程实践与编程生态",
       "search": {
-        "queries": ["developer news", "programming latest", "open source updates", "software engineering"],
-        "twitter_queries": ["developer", "programming", "开源"],
-        "github_query": "developer programming in:topics,name,description",
-        "must_include": ["developer", "programming", "open source", "software", "code", "开发"],
-        "exclude": []
+        "queries": [
+          "developer tools open source",
+          "software engineering tooling",
+          "programming framework release",
+          "开发工具 开源 软件工程"
+        ],
+        "twitter_queries": [
+          "developer tools",
+          "programming",
+          "开源"
+        ],
+        "github_query": "",
+        "exclude": [
+          "tutorial",
+          "beginner guide"
+        ]
       },
       "display": {
         "max_items": 6,
@@ -72,15 +144,23 @@
       }
     },
     {
-      "id": "finance",
+      "id": "markets-business",
       "emoji": "💰",
-      "label": "Finance / 财经金融",
-      "description": "金融市场、投资理财、宏观经济、商业分析、证券市场",
+      "label": "Markets & Business / 市场与商业",
+      "description": "资本市场、公司、商业竞争、投资动向与行业格局",
       "search": {
-        "queries": ["finance news", "market updates", "investment latest", "stock market"],
-        "twitter_queries": ["finance", "market", "投资"],
-        "github_query": "finance trading in:topics,name,description",
-        "must_include": ["finance", "market", "investment", "stock", "财经", "金融", "投资"],
+        "queries": [
+          "capital markets business",
+          "stock market company earnings",
+          "global business industry",
+          "市场 商业 投资 公司"
+        ],
+        "twitter_queries": [
+          "markets",
+          "business",
+          "投资"
+        ],
+        "github_query": "",
         "exclude": []
       },
       "display": {
@@ -89,15 +169,73 @@
       }
     },
     {
-      "id": "security",
+      "id": "macro-policy",
+      "emoji": "📊",
+      "label": "Macro Policy / 宏观政策",
+      "description": "宏观经济、央行政策、监管、财政与官方制度变化",
+      "search": {
+        "queries": [
+          "central bank inflation regulation",
+          "macro economy fiscal policy",
+          "interest rates economic policy",
+          "宏观经济 央行 利率 监管"
+        ],
+        "twitter_queries": [
+          "macro",
+          "inflation",
+          "政策"
+        ],
+        "github_query": "",
+        "exclude": []
+      },
+      "display": {
+        "max_items": 6,
+        "style": "compact"
+      }
+    },
+    {
+      "id": "world-affairs",
+      "emoji": "🌍",
+      "label": "World Affairs / 国际事务",
+      "description": "国际政治、外交关系、地区冲突、地缘博弈与全球政局",
+      "search": {
+        "queries": [
+          "geopolitics diplomacy conflict",
+          "sanctions war election government",
+          "international relations security",
+          "国际政治 外交 冲突 制裁"
+        ],
+        "twitter_queries": [
+          "geopolitics",
+          "world affairs",
+          "国际政治"
+        ],
+        "github_query": "",
+        "exclude": []
+      },
+      "display": {
+        "max_items": 6,
+        "style": "compact"
+      }
+    },
+    {
+      "id": "cybersecurity",
       "emoji": "🔒",
-      "label": "Security / 网络安全",
-      "description": "网络安全、信息安全、漏洞披露、隐私保护、黑客攻击",
+      "label": "Cybersecurity / 网络安全",
+      "description": "网络安全、漏洞披露、隐私保护、攻击事件与安全研究",
       "search": {
-        "queries": ["cybersecurity news", "security vulnerability", "hacking latest", "privacy updates"],
-        "twitter_queries": ["security", "cybersecurity", "黑客"],
-        "github_query": "security cybersecurity in:topics,name,description",
-        "must_include": ["security", "cybersecurity", "vulnerability", "hack", "privacy", "安全", "漏洞"],
+        "queries": [
+          "cybersecurity vulnerability breach",
+          "hacking incident privacy",
+          "security research CVE",
+          "网络安全 漏洞 数据泄露"
+        ],
+        "twitter_queries": [
+          "security",
+          "cybersecurity",
+          "黑客"
+        ],
+        "github_query": "",
         "exclude": []
       },
       "display": {
@@ -106,36 +244,26 @@
       }
     },
     {
-      "id": "news",
-      "emoji": "📰",
-      "label": "News / 综合新闻",
-      "description": "全球新闻、时事热点、政治经济、社会动态",
+      "id": "github",
+      "emoji": "📦",
+      "label": "GitHub / 开源动态",
+      "description": "GitHub Releases、关键仓库更新、开源项目动态与 Trending 仓库",
       "search": {
-        "queries": ["world news", "breaking news", "global updates", "current events"],
-        "twitter_queries": ["news", "breaking", "热点"],
-        "github_query": "",
-        "must_include": ["news", "breaking", "world", "global", "新闻", "热点"],
+        "queries": [
+          "GitHub open source release",
+          "GitHub trending repositories",
+          "开源项目 更新"
+        ],
+        "twitter_queries": [
+          "GitHub release",
+          "open source",
+          "开源更新"
+        ],
+        "github_query": "open-source developer tooling ai infrastructure in:topics,name,description",
         "exclude": []
       },
       "display": {
         "max_items": 6,
-        "style": "compact"
-      }
-    },
-    {
-      "id": "consumer-tech",
-      "emoji": "📱",
-      "label": "Consumer Tech / 消费电子",
-      "description": "消费电子、数码产品、科技评测、智能硬件",
-      "search": {
-        "queries": ["consumer electronics", "gadget reviews", "smartphone latest", "tech products"],
-        "twitter_queries": ["gadget", "smartphone", "数码"],
-        "github_query": "",
-        "must_include": ["gadget", "smartphone", "electronics", "device", "数码", "电子产品"],
-        "exclude": []
-      },
-      "display": {
-        "max_items": 5,
         "style": "compact"
       }
     }

@@ -1,0 +1,128 @@
+{
+  "generated": "2026-03-28T04:42:00+00:00",
+  "source_type": "google",
+  "defaults_dir": "(redacted)",
+  "config_dir": "(redacted)",
+  "topics_total": 3,
+  "topics_ok": 3,
+  "total_articles": 6,
+  "topics": [
+    {
+      "topic_id": "ai-models",
+      "status": "ok",
+      "queries_executed": 2,
+      "queries_ok": 2,
+      "query_stats": [
+        {
+          "query": "LLM latest world-affairs",
+          "status": "ok",
+          "count": 3
+        },
+        {
+          "query": "foundation model updates",
+          "status": "ok",
+          "count": 3
+        }
+      ],
+      "count": 2,
+      "articles": [
+        {
+          "title": "OpenAI and Anthropic push faster model release cadence",
+          "link": "https://example.com/ai-models-release-cadence",
+          "snippet": "Model labs are accelerating release cycles while competing on quality, latency and tooling.",
+          "date": "2026-03-28T04:10:00+00:00",
+          "topics": [
+            "ai-models"
+          ]
+        },
+        {
+          "title": "Foundation model benchmarks shift toward multimodal and reasoning workloads",
+          "link": "https://example.com/foundation-model-benchmarks",
+          "snippet": "Benchmarks now emphasize agentic and multimodal tasks rather than single-shot accuracy.",
+          "date": "2026-03-28T03:25:00+00:00",
+          "topics": [
+            "ai-models"
+          ]
+        }
+      ]
+    },
+    {
+      "topic_id": "ai-agents",
+      "status": "ok",
+      "queries_executed": 2,
+      "queries_ok": 2,
+      "query_stats": [
+        {
+          "query": "AI agent latest developments",
+          "status": "ok",
+          "count": 3
+        },
+        {
+          "query": "agent framework updates",
+          "status": "ok",
+          "count": 3
+        }
+      ],
+      "count": 2,
+      "articles": [
+        {
+          "title": "Perplexity and OpenAI race to productize computer-using agents",
+          "link": "https://example.com/computer-using-agents",
+          "snippet": "The new wave of products emphasizes browser control, workflow automation and human review.",
+          "date": "2026-03-28T02:55:00+00:00",
+          "topics": [
+            "ai-agents"
+          ]
+        },
+        {
+          "title": "Agent frameworks converge on MCP-style tool interoperability",
+          "link": "https://example.com/mcp-tool-interoperability",
+          "snippet": "Tool calling and protocol compatibility are becoming table stakes across agent platforms.",
+          "date": "2026-03-28T01:50:00+00:00",
+          "topics": [
+            "ai-agents"
+          ]
+        }
+      ]
+    },
+    {
+      "topic_id": "ai-ecosystem",
+      "status": "ok",
+      "queries_executed": 2,
+      "queries_ok": 2,
+      "query_stats": [
+        {
+          "query": "AI chip world-affairs",
+          "status": "ok",
+          "count": 3
+        },
+        {
+          "query": "Tesla SpaceX robotics AI",
+          "status": "ok",
+          "count": 3
+        }
+      ],
+      "count": 2,
+      "articles": [
+        {
+          "title": "HBM memory and packaging suppliers emerge as AI infrastructure bottlenecks",
+          "link": "https://example.com/hbm-packaging-bottlenecks",
+          "snippet": "Investors are tracking memory vendors, advanced packaging and hyperscaler capex for AI demand.",
+          "date": "2026-03-28T03:40:00+00:00",
+          "topics": [
+            "ai-ecosystem"
+          ]
+        },
+        {
+          "title": "Tesla, SpaceX and robotics suppliers gain attention as physical AI theme expands",
+          "link": "https://example.com/physical-ai-theme-expands",
+          "snippet": "The physical AI narrative is widening beyond labs into vehicles, robots and industrial systems.",
+          "date": "2026-03-28T00:40:00+00:00",
+          "topics": [
+            "ai-ecosystem"
+          ]
+        }
+      ]
+    }
+  ]
+}

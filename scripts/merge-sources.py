@@ -1,276 +1,653 @@
 #!/usr/bin/env python3
 """
-Merge data from all sources (RSS, Twitter, Web) with quality scoring.
+Merge data from enabled fetch steps with layered scoring and deduplication.
 
-Reads output from fetch-rss.py, fetch-twitter.py, and fetch-web.py,
-merges articles, removes duplicates, applies quality scoring, and
-groups by topics for final digest output.
-
-Usage:
-    python3 merge-sources.py [--rss FILE] [--twitter FILE] [--web FILE] [--output FILE] [--verbose]
+Reads output from fetch-rss.py, fetch-twitter.py, fetch-google.py,
+fetch-github.py, fetch-github-trending.py, fetch-api.py, fetch-reddit.py,
+fetch-v2ex.py, and any other compatible JSON inputs that are provided.
 """
 
-import json
-import sys
-import os
 import argparse
+import json
 import logging
-import tempfile
+import os
 import re
-from datetime import datetime, timezone, timedelta
+import sys
+import tempfile
+import unicodedata
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Set
-from difflib import SequenceMatcher
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from urllib.parse import urlparse
 
-# Quality scoring weights
-SCORE_MULTI_SOURCE = 5      # Article appears in multiple sources
-SCORE_PRIORITY_SOURCE = 3   # From high-priority source
-SCORE_RECENT = 2            # Recent article (< 24h)
-SCORE_ENGAGEMENT_VIRAL = 5   # Viral tweet (1000+ likes or 500+ RTs)
-SCORE_ENGAGEMENT_HIGH = 3    # High engagement (500+ likes or 200+ RTs)
-SCORE_ENGAGEMENT_MED = 2     # Medium engagement (100+ likes or 50+ RTs)
-SCORE_ENGAGEMENT_LOW = 1     # Some engagement (50+ likes or 20+ RTs)
-PENALTY_DUPLICATE = -10     # Duplicate/very similar title
-PENALTY_OLD_REPORT = -5     # Already in previous digest
+try:
+    from rapidfuzz import fuzz
+except ImportError:  # pragma: no cover - defensive fallback
+    fuzz = None
 
-# Deduplication thresholds
-TITLE_SIMILARITY_THRESHOLD = 0.75  # Lowered from 0.85 to catch more duplicates
-DOMAIN_DUPLICATE_THRESHOLD = 0.95
+
+SCORING_CONFIG = {
+    "fetch_rank_max": 3.0,
+    "history_threshold": 0.88,
+    "history_penalties": [
+        (0.96, -16.0),
+        (0.92, -12.0),
+        (0.88, -8.0),
+    ],
+    "cross_source_hot_threshold": 0.86,
+    "duplicate_threshold": 0.92,
+    "cross_source_hot_per_extra_type": 2.0,
+    "cross_source_hot_cap": 6.0,
+    "recency_24h_bonus": 1.0,
+    "recency_6h_bonus": 0.5,
+    "topic_same_source_penalty": 1.5,
+    "topic_same_domain_penalty": 0.75,
+    "topic_first3_source_penalty": 3.0,
+    "topic_first3_domain_penalty": 1.5,
+}
+
+SCORE_ENGAGEMENT_VIRAL = 5
+SCORE_ENGAGEMENT_HIGH = 3
+SCORE_ENGAGEMENT_MED = 2
+SCORE_ENGAGEMENT_LOW = 1
+SCORE_DISCUSSION_VIRAL = 5
+SCORE_DISCUSSION_HIGH = 3
+SCORE_DISCUSSION_MED = 2
+SCORE_DISCUSSION_LOW = 1
+
+DOMAIN_LIMIT_EXEMPT = {"x.com", "twitter.com", "github.com", "reddit.com"}
+CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
+NON_WORD_RE = re.compile(r"[^\w\s\u3400-\u4dbf\u4e00-\u9fff]+", re.UNICODE)
+SPACE_RE = re.compile(r"\s+")
 
 
 def setup_logging(verbose: bool) -> logging.Logger:
-    """Setup logging configuration."""
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
         level=level,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
+        format="%(asctime)s - %(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
     return logging.getLogger(__name__)
 
 
 def load_source_data(file_path: Optional[Path]) -> Dict[str, Any]:
-    """Load source data from JSON file."""
     if not file_path or not file_path.exists():
         return {"sources": [], "total_articles": 0}
-        
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        return data
-    except Exception as e:
-        logging.warning(f"Failed to load {file_path}: {e}")
+        with open(file_path, "r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except Exception as exc:
+        logging.warning("Failed to load %s: %s", file_path, exc)
         return {"sources": [], "total_articles": 0}
+
+
+def normalize_priority(priority: Any, default: int = 3) -> int:
+    if isinstance(priority, bool):
+        return default
+    try:
+        value = int(priority)
+    except (TypeError, ValueError):
+        return default
+    return max(1, min(10, value))
+
+
+def parse_article_datetime(value: Any) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except Exception:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def normalize_title(title: str) -> str:
-    """Normalize title for comparison."""
-    # Remove common prefixes/suffixes
-    title = re.sub(r'^(RT\s+@\w+:\s*)', '', title, flags=re.IGNORECASE)
-    title = re.sub(r'\s*[|\-–]\s*[^|]*$', '', title)  # Remove " | Site Name" endings
-    
-    # Normalize whitespace and punctuation
-    title = re.sub(r'\s+', ' ', title).strip()
-    title = re.sub(r'[^\w\s]', '', title.lower())
-    
-    return title
-
-
-def calculate_title_similarity(title1: str, title2: str) -> float:
-    """Calculate similarity between two titles."""
-    norm1 = normalize_title(title1)
-    norm2 = normalize_title(title2)
-    
-    if not norm1 or not norm2:
-        return 0.0
-        
-    return SequenceMatcher(None, norm1, norm2).ratio()
-
-
-def get_domain(url: str) -> str:
-    """Extract domain from URL."""
-    try:
-        return urlparse(url).netloc.lower().replace('www.', '')
-    except Exception:
-        return ''
+    text = unicodedata.normalize("NFKC", title or "").lower()
+    text = re.sub(r"([a-z0-9])([\u3400-\u4dbf\u4e00-\u9fff])", r"\1 \2", text)
+    text = re.sub(r"([\u3400-\u4dbf\u4e00-\u9fff])([a-z0-9])", r"\1 \2", text)
+    text = NON_WORD_RE.sub(" ", text)
+    text = SPACE_RE.sub(" ", text).strip()
+    return text
 
 
 def normalize_url(url: str) -> str:
-    """Normalize URL for dedup comparison (strip query, fragment, trailing slash, www.)."""
     try:
         parsed = urlparse(url)
-        domain = parsed.netloc.lower().replace('www.', '')
-        path = parsed.path.rstrip('/')
+        domain = parsed.netloc.lower().replace("www.", "")
+        path = parsed.path.rstrip("/")
         return f"{domain}{path}"
     except Exception:
         return url
 
 
-def calculate_base_score(article: Dict[str, Any], source: Dict[str, Any]) -> float:
-    """Calculate base quality score for an article."""
-    score = 0.0
-    
-    # Priority source bonus
-    if source.get("priority", False):
-        score += SCORE_PRIORITY_SOURCE
-        
-    # Recency bonus (< 24 hours)
+def get_domain(url: str) -> str:
     try:
-        article_date = datetime.fromisoformat(article["date"].replace('Z', '+00:00'))
-        hours_old = (datetime.now(timezone.utc) - article_date).total_seconds() / 3600
-        if hours_old < 24:
-            score += SCORE_RECENT
+        return urlparse(url).netloc.lower().replace("www.", "")
     except Exception:
-        pass
-    
-    # Twitter engagement bonus (tiered)
-    if source.get("source_type") == "twitter" and "metrics" in article:
-        metrics = article["metrics"]
+        return ""
+
+
+def contains_cjk(text: str) -> bool:
+    return bool(CJK_RE.search(text))
+
+
+def tokenize_words(text: str) -> Set[str]:
+    return {token for token in normalize_title(text).split() if len(token) >= 2}
+
+
+def tokenize_cjk_bigrams(text: str) -> Set[str]:
+    normalized = normalize_title(text).replace(" ", "")
+    chars = [ch for ch in normalized if contains_cjk(ch)]
+    return {"".join(chars[i:i + 2]) for i in range(len(chars) - 1)}
+
+
+def tokenize_compact_bigrams(text: str) -> Set[str]:
+    compact = normalize_title(text).replace(" ", "")
+    return {"".join(compact[i:i + 2]) for i in range(len(compact) - 1)}
+
+
+def token_jaccard(tokens_a: Set[str], tokens_b: Set[str]) -> float:
+    if not tokens_a or not tokens_b:
+        return 0.0
+    union = tokens_a | tokens_b
+    if not union:
+        return 0.0
+    return len(tokens_a & tokens_b) / len(union)
+
+
+def _fallback_ratio(text_a: str, text_b: str) -> float:
+    if text_a == text_b:
+        return 1.0
+    if not text_a or not text_b:
+        return 0.0
+    from difflib import SequenceMatcher
+    return SequenceMatcher(None, text_a, text_b).ratio()
+
+
+def rapidfuzz_ratio(kind: str, text_a: str, text_b: str) -> float:
+    if not text_a or not text_b:
+        return 0.0
+    if fuzz is None:
+        return _fallback_ratio(text_a, text_b)
+    if kind == "token_set":
+        return fuzz.token_set_ratio(text_a, text_b) / 100.0
+    if kind == "partial":
+        return fuzz.partial_ratio(text_a, text_b) / 100.0
+    return fuzz.ratio(text_a, text_b) / 100.0
+
+
+def build_similarity_features(article: Dict[str, Any]) -> Dict[str, Any]:
+    title = article.get("title", "")
+    normalized = normalize_title(title)
+    compact = normalized.replace(" ", "")
+    return {
+        "normalized_title": normalized,
+        "normalized_compact": compact,
+        "word_tokens": tokenize_words(title),
+        "cjk_bigrams": tokenize_cjk_bigrams(title),
+        "compact_bigrams": tokenize_compact_bigrams(title),
+        "normalized_url": normalize_url(article.get("link", "")),
+        "domain": get_domain(article.get("link", "")),
+    }
+
+
+def should_compare(features_a: Dict[str, Any], features_b: Dict[str, Any]) -> bool:
+    if features_a["normalized_title"] and features_a["normalized_title"] == features_b["normalized_title"]:
+        return True
+    if features_a["normalized_compact"] and features_a["normalized_compact"] == features_b["normalized_compact"]:
+        return True
+    if features_a["normalized_url"] and features_a["normalized_url"] == features_b["normalized_url"]:
+        return True
+    if len(features_a["word_tokens"] & features_b["word_tokens"]) >= 2:
+        return True
+    if len(features_a["cjk_bigrams"] & features_b["cjk_bigrams"]) >= 3:
+        return True
+    if len(features_a["compact_bigrams"] & features_b["compact_bigrams"]) >= 4:
+        return True
+    return False
+
+
+def calculate_title_similarity(title1: str, title2: str) -> float:
+    features_a = build_similarity_features({"title": title1, "link": ""})
+    features_b = build_similarity_features({"title": title2, "link": ""})
+    return calculate_similarity_from_features(features_a, features_b)
+
+
+def calculate_similarity_from_features(features_a: Dict[str, Any], features_b: Dict[str, Any]) -> float:
+    title_a = features_a["normalized_title"]
+    title_b = features_b["normalized_title"]
+    compact_a = features_a["normalized_compact"]
+    compact_b = features_b["normalized_compact"]
+    if compact_a and compact_a == compact_b:
+        return 1.0
+
+    token_set = max(
+        rapidfuzz_ratio("token_set", title_a, title_b),
+        rapidfuzz_ratio("token_set", compact_a, compact_b),
+    )
+    partial = max(
+        rapidfuzz_ratio("partial", title_a, title_b),
+        rapidfuzz_ratio("partial", compact_a, compact_b),
+    )
+    direct_ratio = max(
+        rapidfuzz_ratio("ratio", title_a, title_b),
+        rapidfuzz_ratio("ratio", compact_a, compact_b),
+    )
+    combined_tokens = (
+        features_a["word_tokens"] | features_a["cjk_bigrams"] | features_a["compact_bigrams"],
+        features_b["word_tokens"] | features_b["cjk_bigrams"] | features_b["compact_bigrams"],
+    )
+    jaccard = token_jaccard(*combined_tokens)
+
+    url_hint = 0.0
+    if features_a["normalized_url"] and features_a["normalized_url"] == features_b["normalized_url"]:
+        url_hint = 1.0
+    elif compact_a and compact_b and (
+        (compact_a in compact_b and len(compact_a) / max(len(compact_b), 1) >= 0.7)
+        or (compact_b in compact_a and len(compact_b) / max(len(compact_a), 1) >= 0.7)
+    ):
+        url_hint = 1.0
+    elif features_a["domain"] and features_a["domain"] == features_b["domain"]:
+        url_hint = 0.4
+
+    score = (
+        0.35 * token_set
+        + 0.25 * partial
+        + 0.20 * jaccard
+        + 0.10 * direct_ratio
+        + 0.10 * url_hint
+    )
+    shared_word_tokens = len(features_a["word_tokens"] & features_b["word_tokens"])
+    if token_set >= 0.95 and direct_ratio >= 0.9:
+        score = max(score, 0.93)
+    if shared_word_tokens >= 2 and partial >= 0.85 and token_set >= 0.85:
+        score = max(score, 0.8)
+    return min(score, 1.0)
+
+
+
+class UnionFind:
+    def __init__(self, size: int):
+        self.parent = list(range(size))
+
+    def find(self, index: int) -> int:
+        while self.parent[index] != index:
+            self.parent[index] = self.parent[self.parent[index]]
+            index = self.parent[index]
+        return index
+
+    def union(self, a: int, b: int) -> None:
+        root_a = self.find(a)
+        root_b = self.find(b)
+        if root_a != root_b:
+            self.parent[root_b] = root_a
+
+
+def calculate_local_extra_score(article: Dict[str, Any], source_type: str) -> float:
+    if source_type == "twitter":
+        metrics = article.get("metrics", {})
         likes = metrics.get("like_count", 0)
         retweets = metrics.get("retweet_count", 0)
-        
-        if likes >= 1000 or retweets >= 500:
-            score += SCORE_ENGAGEMENT_VIRAL
-        elif likes >= 500 or retweets >= 200:
-            score += SCORE_ENGAGEMENT_HIGH
-        elif likes >= 100 or retweets >= 50:
-            score += SCORE_ENGAGEMENT_MED
-        elif likes >= 50 or retweets >= 20:
-            score += SCORE_ENGAGEMENT_LOW
+        replies = metrics.get("reply_count", 0)
+        if likes >= 1000 or retweets >= 500 or replies >= 300:
+            return float(SCORE_ENGAGEMENT_VIRAL)
+        if likes >= 500 or retweets >= 200 or replies >= 150:
+            return float(SCORE_ENGAGEMENT_HIGH)
+        if likes >= 100 or retweets >= 50 or replies >= 60:
+            return float(SCORE_ENGAGEMENT_MED)
+        if likes >= 50 or retweets >= 20 or replies >= 20:
+            return float(SCORE_ENGAGEMENT_LOW)
+        return 0.0
 
-    # RSS from priority sources get extra weight (official blogs, research papers)
-    if source.get("source_type") == "rss" and source.get("priority", False):
-        score += 2  # Extra priority RSS bonus
+    if source_type == "reddit":
+        score = int(article.get("score", 0) or 0)
+        comments = int(article.get("num_comments", 0) or 0)
+        if score >= 1000 or comments >= 300:
+            return float(SCORE_DISCUSSION_VIRAL)
+        if score >= 500 or comments >= 150:
+            return float(SCORE_DISCUSSION_HIGH)
+        if score >= 200 or comments >= 80:
+            return float(SCORE_DISCUSSION_MED)
+        if score >= 100 or comments >= 30:
+            return float(SCORE_DISCUSSION_LOW)
+        return 0.0
 
-    return score
+    if source_type == "v2ex":
+        return float(calculate_v2ex_replies_bonus(article.get("replies", 0)))
 
-
-def _extract_tokens(title: str) -> Set[str]:
-    """Extract significant tokens from a normalized title for bucketing."""
-    norm = normalize_title(title)
-    # Split into tokens, filter short/common words
-    stopwords = {'the', 'a', 'an', 'is', 'are', 'was', 'were', 'in', 'on', 'at',
-                 'to', 'for', 'of', 'and', 'or', 'with', 'by', 'from', 'as', 'it',
-                 'its', 'that', 'this', 'be', 'has', 'had', 'have', 'not', 'but',
-                 'what', 'how', 'new', 'will', 'can', 'do', 'does', 'did'}
-    tokens = set()
-    for word in norm.split():
-        if len(word) >= 3 and word not in stopwords:
-            tokens.add(word)
-    return tokens
+    return 0.0
 
 
-def _build_token_buckets(articles: List[Dict[str, Any]]) -> Dict[int, Set[int]]:
-    """Build token-based buckets mapping each article index to candidate duplicate indices.
-    
-    Two articles are candidates if they share 2+ significant tokens.
-    Returns dict: article_index -> set of candidate article indices to compare against.
-    """
-    from collections import defaultdict
-    
-    # token -> list of article indices
-    token_to_indices: Dict[str, List[int]] = defaultdict(list)
-    article_tokens: List[Set[str]] = []
-    
-    for i, article in enumerate(articles):
-        tokens = _extract_tokens(article.get("title", ""))
-        article_tokens.append(tokens)
-        for token in tokens:
-            token_to_indices[token].append(i)
-    
-    # For each article, find candidates sharing 2+ tokens
-    candidates: Dict[int, Set[int]] = defaultdict(set)
-    for i, tokens in enumerate(article_tokens):
-        # Count how many tokens each other article shares with this one
-        overlap_count: Dict[int, int] = defaultdict(int)
-        for token in tokens:
-            for j in token_to_indices[token]:
-                if j != i:
-                    overlap_count[j] += 1
-        for j, count in overlap_count.items():
-            if count >= 2:
-                candidates[i].add(j)
-    
-    return candidates
+def calculate_v2ex_replies_bonus(replies: Any) -> int:
+    try:
+        replies_int = int(replies)
+    except (TypeError, ValueError):
+        return 0
+    if replies_int >= 200:
+        return SCORE_DISCUSSION_VIRAL
+    if replies_int >= 100:
+        return SCORE_DISCUSSION_HIGH
+    if replies_int >= 50:
+        return SCORE_DISCUSSION_MED
+    if replies_int >= 20:
+        return SCORE_DISCUSSION_LOW
+    return 0
 
 
-def deduplicate_articles(articles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Remove duplicate articles based on title similarity.
-    
-    Uses token-based bucketing to avoid O(n²) SequenceMatcher comparisons.
-    Only articles sharing 2+ significant title tokens are compared.
-    Domain saturation is handled separately per-topic after grouping.
-    """
+def calculate_recency_bonus(article: Dict[str, Any]) -> float:
+    article_date = parse_article_datetime(article.get("date"))
+    if article_date is None:
+        return 0.0
+
+    hours_old = (datetime.now(timezone.utc) - article_date).total_seconds() / 3600
+    if hours_old < 6:
+        return SCORING_CONFIG["recency_24h_bonus"] + SCORING_CONFIG["recency_6h_bonus"]
+    if hours_old < 24:
+        return SCORING_CONFIG["recency_24h_bonus"]
+    return 0.0
+
+
+def initialize_article_scores(articles: List[Dict[str, Any]]) -> None:
+    for article in articles:
+        source_type = article.get("source_type", "")
+        base_priority_score = float(normalize_priority(article.get("source_priority", 3)))
+        local_extra_score = calculate_local_extra_score(article, source_type)
+        article["score_breakdown"] = {
+            "base_priority_score": base_priority_score,
+            "local_extra_score": local_extra_score,
+            "fetch_local_rank_score": 0.0,
+            "history_penalty": 0.0,
+            "cross_source_hot_bonus": 0.0,
+            "recency_bonus": 0.0,
+        }
+        article["similarity_debug"] = {
+            "best_history_similarity": 0.0,
+            "duplicate_cluster_id": None,
+            "cluster_size": 1,
+            "cross_source_match_count": 0,
+        }
+        article["quality_score"] = base_priority_score
+        article["final_score"] = base_priority_score
+
+
+def assign_fetch_rank_scores(articles: List[Dict[str, Any]]) -> None:
+    fetch_groups: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for article in articles:
+        fetch_groups[article.get("source_type", "unknown")].append(article)
+
+    for fetch_type, group in fetch_groups.items():
+        ordered = sorted(
+            group,
+            key=lambda item: (
+                -(item["score_breakdown"]["base_priority_score"] + item["score_breakdown"]["local_extra_score"]),
+                item.get("title", ""),
+            ),
+        )
+        total = len(ordered)
+        for rank, article in enumerate(ordered, start=1):
+            if total <= 1:
+                rank_pct = 1.0
+            else:
+                rank_pct = 1.0 - ((rank - 1) / (total - 1))
+            article["score_breakdown"]["fetch_local_rank_score"] = round(
+                SCORING_CONFIG["fetch_rank_max"] * rank_pct, 3
+            )
+        logging.debug("Assigned fetch-local rank scores for %s (%d items)", fetch_type, total)
+
+
+def build_previous_title_features(previous_titles: Iterable[str]) -> List[Dict[str, Any]]:
+    return [
+        {"raw": title, **build_similarity_features({"title": title, "link": ""})}
+        for title in previous_titles
+    ]
+
+
+def best_history_similarity(article: Dict[str, Any], previous_title_features: List[Dict[str, Any]]) -> float:
+    if not previous_title_features:
+        return 0.0
+    article_features = article["_similarity_features"]
+    best = 0.0
+    for previous in previous_title_features:
+        best = max(best, calculate_similarity_from_features(article_features, previous))
+    return best
+
+
+def history_penalty_for_similarity(value: float) -> float:
+    for threshold, penalty in SCORING_CONFIG["history_penalties"]:
+        if value >= threshold:
+            return penalty
+    return 0.0
+
+
+def apply_history_penalties(articles: List[Dict[str, Any]], previous_titles: Iterable[str]) -> None:
+    previous_features = build_previous_title_features(previous_titles)
+    for article in articles:
+        similarity = best_history_similarity(article, previous_features)
+        penalty = history_penalty_for_similarity(similarity)
+        article["similarity_debug"]["best_history_similarity"] = round(similarity, 4)
+        article["score_breakdown"]["history_penalty"] = penalty
+        if penalty < 0:
+            article["in_previous_digest"] = True
+
+
+def build_candidate_pairs(articles: List[Dict[str, Any]]) -> Iterable[Tuple[int, int]]:
+    word_buckets: Dict[str, List[int]] = defaultdict(list)
+    cjk_buckets: Dict[str, List[int]] = defaultdict(list)
+    url_buckets: Dict[str, List[int]] = defaultdict(list)
+    title_buckets: Dict[str, List[int]] = defaultdict(list)
+    compact_buckets: Dict[str, List[int]] = defaultdict(list)
+
+    for idx, article in enumerate(articles):
+        features = article["_similarity_features"]
+        for token in features["word_tokens"]:
+            word_buckets[token].append(idx)
+        for token in features["cjk_bigrams"]:
+            cjk_buckets[token].append(idx)
+        if features["normalized_url"]:
+            url_buckets[features["normalized_url"]].append(idx)
+        if features["normalized_title"]:
+            title_buckets[features["normalized_title"]].append(idx)
+        if features["normalized_compact"]:
+            compact_buckets[features["normalized_compact"]].append(idx)
+
+    pair_counts: Dict[Tuple[int, int], int] = defaultdict(int)
+    for bucket in word_buckets.values():
+        if len(bucket) < 2:
+            continue
+        for i in range(len(bucket)):
+            for j in range(i + 1, len(bucket)):
+                pair = (bucket[i], bucket[j])
+                pair_counts[pair] += 1
+
+    cjk_counts: Dict[Tuple[int, int], int] = defaultdict(int)
+    for bucket in cjk_buckets.values():
+        if len(bucket) < 2:
+            continue
+        for i in range(len(bucket)):
+            for j in range(i + 1, len(bucket)):
+                pair = (bucket[i], bucket[j])
+                cjk_counts[pair] += 1
+
+    yielded: Set[Tuple[int, int]] = set()
+    for pair, count in pair_counts.items():
+        if count >= 2:
+            yielded.add(pair)
+            yield pair
+    for pair, count in cjk_counts.items():
+        if count >= 3 and pair not in yielded:
+            yielded.add(pair)
+            yield pair
+    for bucket in url_buckets.values():
+        if len(bucket) < 2:
+            continue
+        for i in range(len(bucket)):
+            for j in range(i + 1, len(bucket)):
+                pair = (bucket[i], bucket[j])
+                if pair not in yielded:
+                    yielded.add(pair)
+                    yield pair
+    for bucket in title_buckets.values():
+        if len(bucket) < 2:
+            continue
+        for i in range(len(bucket)):
+            for j in range(i + 1, len(bucket)):
+                pair = (bucket[i], bucket[j])
+                if pair not in yielded:
+                    yielded.add(pair)
+                    yield pair
+    for bucket in compact_buckets.values():
+        if len(bucket) < 2:
+            continue
+        for i in range(len(bucket)):
+            for j in range(i + 1, len(bucket)):
+                pair = (bucket[i], bucket[j])
+                if pair not in yielded:
+                    yielded.add(pair)
+                    yield pair
+
+
+def apply_cross_source_hot_bonus(articles: List[Dict[str, Any]], pair_similarities: Dict[Tuple[int, int], float]) -> None:
+    hot_union = UnionFind(len(articles))
+    for (i, j), similarity in pair_similarities.items():
+        if similarity < SCORING_CONFIG["cross_source_hot_threshold"]:
+            continue
+        if articles[i].get("source_type") == articles[j].get("source_type"):
+            continue
+        hot_union.union(i, j)
+
+    hot_groups: Dict[int, List[int]] = defaultdict(list)
+    for idx in range(len(articles)):
+        hot_groups[hot_union.find(idx)].append(idx)
+
+    for indices in hot_groups.values():
+        source_types = {articles[idx].get("source_type", "") for idx in indices if articles[idx].get("source_type")}
+        extra_types = max(0, len(source_types) - 1)
+        bonus = min(
+            SCORING_CONFIG["cross_source_hot_cap"],
+            SCORING_CONFIG["cross_source_hot_per_extra_type"] * extra_types,
+        )
+        for idx in indices:
+            articles[idx]["score_breakdown"]["cross_source_hot_bonus"] = bonus
+            articles[idx]["similarity_debug"]["cross_source_match_count"] = extra_types
+
+
+def recalculate_final_scores(articles: List[Dict[str, Any]]) -> None:
+    for article in articles:
+        breakdown = article["score_breakdown"]
+        breakdown["recency_bonus"] = calculate_recency_bonus(article)
+        final_score = (
+            breakdown["base_priority_score"]
+            + breakdown["fetch_local_rank_score"]
+            + breakdown["history_penalty"]
+            + breakdown["cross_source_hot_bonus"]
+            + breakdown["recency_bonus"]
+        )
+        article["final_score"] = round(final_score, 3)
+        article["quality_score"] = article["final_score"]
+
+
+def apply_similarity_scoring(articles: List[Dict[str, Any]], previous_titles: Iterable[str]) -> Dict[Tuple[int, int], float]:
+    for article in articles:
+        article["_similarity_features"] = build_similarity_features(article)
+
+    assign_fetch_rank_scores(articles)
+    apply_history_penalties(articles, previous_titles)
+
+    pair_similarities: Dict[Tuple[int, int], float] = {}
+    for i, j in build_candidate_pairs(articles):
+        features_i = articles[i]["_similarity_features"]
+        features_j = articles[j]["_similarity_features"]
+        if not should_compare(features_i, features_j):
+            continue
+        pair_similarities[(i, j)] = calculate_similarity_from_features(features_i, features_j)
+
+    apply_cross_source_hot_bonus(articles, pair_similarities)
+    recalculate_final_scores(articles)
+    return pair_similarities
+
+
+def merge_cluster_metadata(canonical: Dict[str, Any], cluster_articles: List[Dict[str, Any]], cluster_id: int) -> Dict[str, Any]:
+    unique_sources = []
+    seen = set()
+    for article in cluster_articles:
+        source_name = article.get("source_name") or article.get("source_id") or article.get("source_type")
+        if source_name and source_name not in seen:
+            seen.add(source_name)
+            unique_sources.append(source_name)
+
+    canonical["multi_source"] = len({a.get("source_type") for a in cluster_articles}) > 1
+    canonical["source_count"] = len(unique_sources)
+    canonical["all_sources"] = unique_sources[:5]
+    canonical["cluster_size"] = len(cluster_articles)
+    canonical["similarity_debug"]["duplicate_cluster_id"] = cluster_id
+    canonical["similarity_debug"]["cluster_size"] = len(cluster_articles)
+
+    merged_topics = []
+    seen_topics = set()
+    for article in cluster_articles:
+        for topic in article.get("topics", []):
+            if topic not in seen_topics:
+                seen_topics.add(topic)
+                merged_topics.append(topic)
+    canonical["topics"] = merged_topics or canonical.get("topics", [])
+    return canonical
+
+
+def deduplicate_articles(articles: List[Dict[str, Any]], previous_titles: Optional[Iterable[str]] = None) -> List[Dict[str, Any]]:
     if not articles:
         return articles
-        
-    # Sort by quality score (highest first) to keep best versions
-    articles.sort(key=lambda x: x.get("quality_score", 0), reverse=True)
 
-    # Phase 1: URL dedup (exact URL match after normalization)
-    url_seen: Dict[str, int] = {}  # normalized_url -> index in articles
-    url_duplicates: Set[int] = set()
-    for i, article in enumerate(articles):
-        url = article.get("link", "")
-        if not url:
-            continue
-        norm_url = normalize_url(url)
-        if norm_url in url_seen:
-            # Keep the one with higher quality_score (articles already sorted by score)
-            url_duplicates.add(i)
-            logging.debug(f"URL duplicate: {url} ~= {articles[url_seen[norm_url]].get('link','')}")
-        else:
-            url_seen[norm_url] = i
+    for article in articles:
+        article.setdefault("source_priority", normalize_priority(article.get("source_priority", article.get("priority", 3))))
+    initialize_article_scores(articles)
+    pair_similarities = apply_similarity_scoring(articles, previous_titles or [])
 
-    if url_duplicates:
-        articles = [a for i, a in enumerate(articles) if i not in url_duplicates]
-        logging.info(f"URL dedup: removed {len(url_duplicates)} duplicates")
+    duplicate_union = UnionFind(len(articles))
+    for idx, article in enumerate(articles):
+        norm_url = article["_similarity_features"]["normalized_url"]
+        if norm_url:
+            pass
+        article["similarity_debug"]["duplicate_cluster_id"] = idx
 
-    # Phase 2: Title similarity dedup
+    for (i, j), similarity in pair_similarities.items():
+        if similarity >= SCORING_CONFIG["duplicate_threshold"]:
+            duplicate_union.union(i, j)
+        elif (
+            articles[i]["_similarity_features"]["normalized_url"]
+            and articles[i]["_similarity_features"]["normalized_url"] == articles[j]["_similarity_features"]["normalized_url"]
+        ):
+            duplicate_union.union(i, j)
+
+    clusters: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+    for idx, article in enumerate(articles):
+        clusters[duplicate_union.find(idx)].append(article)
+
     deduplicated = []
+    for cluster_id, cluster_articles in clusters.items():
+        canonical = max(
+            cluster_articles,
+            key=lambda item: (
+                item.get("final_score", item.get("quality_score", 0)),
+                item["score_breakdown"]["local_extra_score"],
+                item.get("title", ""),
+            ),
+        )
+        canonical = merge_cluster_metadata(canonical, cluster_articles, cluster_id)
+        deduplicated.append(canonical)
 
-    # Build token buckets for candidate pairs
-    candidates = _build_token_buckets(articles)
-    
-    # Track which indices have been marked as duplicates
-    duplicate_indices: Set[int] = set()
-    
-    for i, article in enumerate(articles):
-        if i in duplicate_indices:
-            continue
-        
-        title = article.get("title", "")
-        
-        # Mark future candidates as duplicates using SequenceMatcher (only within bucket)
-        for j in candidates.get(i, set()):
-            if j > i and j not in duplicate_indices:
-                other_title = articles[j].get("title", "")
-                # Quick length check — titles with >30% length difference are unlikely duplicates
-                norm_i = normalize_title(title)
-                norm_j = normalize_title(other_title)
-                if abs(len(norm_i) - len(norm_j)) > 0.3 * max(len(norm_i), len(norm_j), 1):
-                    continue
-                similarity = calculate_title_similarity(title, other_title)
-                if similarity >= TITLE_SIMILARITY_THRESHOLD:
-                    logging.debug(f"Title duplicate: '{other_title}' ~= '{title}' ({similarity:.2f})")
-                    duplicate_indices.add(j)
-            
-        deduplicated.append(article)
-        
-    logging.info(f"Deduplication: {len(articles)} → {len(deduplicated)} articles")
+    for article in deduplicated:
+        article.pop("_similarity_features", None)
+
+    deduplicated.sort(key=lambda item: item.get("final_score", 0), reverse=True)
+    logging.info("Deduplication: %d → %d articles", len(articles), len(deduplicated))
     return deduplicated
 
 
-# Domains exempt from per-topic limits (multi-author platforms)
-DOMAIN_LIMIT_EXEMPT = {"x.com", "twitter.com", "github.com", "reddit.com"}
-
 def apply_domain_limits(articles: List[Dict[str, Any]], max_per_domain: int = 3) -> List[Dict[str, Any]]:
-    """Limit articles per domain within a single topic group.
-    
-    Should be called per-topic after group_by_topics() to ensure
-    each topic gets its own domain budget.
-    """
     domain_counts: Dict[str, int] = {}
     result = []
     for article in articles:
@@ -278,7 +655,7 @@ def apply_domain_limits(articles: List[Dict[str, Any]], max_per_domain: int = 3)
         if domain and domain not in DOMAIN_LIMIT_EXEMPT:
             count = domain_counts.get(domain, 0)
             if count >= max_per_domain:
-                logging.debug(f"Domain limit ({max_per_domain}): skipping {domain} article in topic")
+                logging.debug("Domain limit (%d): skipping %s article", max_per_domain, domain)
                 continue
             domain_counts[domain] = count + 1
         result.append(article)
@@ -286,468 +663,373 @@ def apply_domain_limits(articles: List[Dict[str, Any]], max_per_domain: int = 3)
 
 
 def merge_article_sources(articles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Merge articles that appear from multiple sources."""
-    if not articles:
-        return articles
-        
-    # Group articles by normalized title
-    title_groups = {}
-    for article in articles:
-        norm_title = normalize_title(article.get("title", ""))
-        if norm_title not in title_groups:
-            title_groups[norm_title] = []
-        title_groups[norm_title].append(article)
-    
-    merged = []
-    for group in title_groups.values():
-        if len(group) == 1:
-            merged.append(group[0])
-        else:
-            # Multiple sources for same story - merge and boost score
-            primary = max(group, key=lambda x: x.get("quality_score", 0))
-            
-            # Collect all source types
-            source_types = set(article.get("source_type", "") for article in group)
-            source_names = [article.get("source_name", "") for article in group]
-            
-            # Multi-source bonus
-            multi_source_bonus = len(source_types) * SCORE_MULTI_SOURCE
-            primary["quality_score"] = primary.get("quality_score", 0) + multi_source_bonus
-            
-            # Add metadata about multiple sources
-            primary["multi_source"] = True
-            primary["source_count"] = len(group)
-            primary["all_sources"] = source_names[:3]  # Limit to avoid bloat
-            
-            logging.debug(f"Merged {len(group)} sources for: '{primary['title'][:50]}...'")
-            merged.append(primary)
-            
-    return merged
-
-
-def load_previous_digests(archive_dir: Path, days: int = 14) -> Set[str]:
-    """Load titles from previous digests to avoid repeats.
-    
-    Args:
-        archive_dir: Path to digest archive directory
-        days: Number of days to look back (default: 14, increased from 7)
-    """
-    if not archive_dir.exists():
-        return set()
-        
-    seen_titles = set()
-    cutoff = datetime.now() - timedelta(days=days)
-    
-    try:
-        for file_path in archive_dir.glob("*.md"):
-            # Extract date from filename
-            match = re.search(r'(\d{4}-\d{2}-\d{2})', file_path.name)
-            if match:
-                try:
-                    file_date = datetime.strptime(match.group(1), "%Y-%m-%d")
-                    if file_date < cutoff:
-                        continue
-                except ValueError:
-                    continue
-                    
-            # Extract titles from markdown
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-                
-            # Simple title extraction (assumes format like "- [Title](link)")
-            for match in re.finditer(r'-\s*\[([^\]]+)\]', content):
-                title = normalize_title(match.group(1))
-                if title:
-                    seen_titles.add(title)
-                    
-    except Exception as e:
-        logging.debug(f"Failed to load previous digests: {e}")
-        
-    logging.info(f"Loaded {len(seen_titles)} titles from previous {days} days")
-    return seen_titles
-
-
-def apply_previous_digest_penalty(articles: List[Dict[str, Any]], 
-                                previous_titles: Set[str]) -> List[Dict[str, Any]]:
-    """Apply penalty to articles that appeared in previous digests."""
-    if not previous_titles:
-        return articles
-        
-    penalized_count = 0
-    for article in articles:
-        norm_title = normalize_title(article.get("title", ""))
-        if norm_title in previous_titles:
-            article["quality_score"] = article.get("quality_score", 0) + PENALTY_OLD_REPORT
-            article["in_previous_digest"] = True
-            penalized_count += 1
-            
-    logging.info(f"Applied previous digest penalty to {penalized_count} articles")
     return articles
 
 
+def load_previous_digests(archive_dir: Path, days: int = 14) -> List[str]:
+    if not archive_dir.exists():
+        return []
+
+    seen_titles: List[str] = []
+    cutoff_date = (datetime.now(timezone.utc) - timedelta(days=days)).date()
+    try:
+        for file_path in archive_dir.glob("*.json"):
+            match = re.search(r"(\d{4}-\d{2}-\d{2})", file_path.name)
+            if match:
+                try:
+                    file_date = datetime.strptime(match.group(1), "%Y-%m-%d").date()
+                    if file_date < cutoff_date:
+                        continue
+                except ValueError:
+                    continue
+            with open(file_path, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+            for topic in data.get("topics", []):
+                for item in topic.get("items", []):
+                    title = str(item.get("title", "")).strip()
+                    if title:
+                        seen_titles.append(title)
+    except Exception as exc:
+        logging.debug("Failed to load previous digests: %s", exc)
+
+    logging.info("Loaded %d titles from previous %d days", len(seen_titles), days)
+    return seen_titles
+
+
+def apply_previous_digest_penalty(articles: List[Dict[str, Any]], previous_titles: Iterable[str]) -> List[Dict[str, Any]]:
+    # Kept for compatibility; penalties are now computed inside deduplicate_articles().
+    return articles
+
+
+def rerank_topic_articles(articles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    remaining = list(articles)
+    selected: List[Dict[str, Any]] = []
+    source_counts: Dict[str, int] = defaultdict(int)
+    domain_counts: Dict[str, int] = defaultdict(int)
+
+    while remaining:
+        slot = len(selected)
+        source_penalty = (
+            SCORING_CONFIG["topic_first3_source_penalty"]
+            if slot < 3
+            else SCORING_CONFIG["topic_same_source_penalty"]
+        )
+        domain_penalty = (
+            SCORING_CONFIG["topic_first3_domain_penalty"]
+            if slot < 3
+            else SCORING_CONFIG["topic_same_domain_penalty"]
+        )
+
+        def display_score(article: Dict[str, Any]) -> Tuple[float, float]:
+            source_type = article.get("source_type", "")
+            domain = get_domain(article.get("link", ""))
+            value = (
+                article.get("final_score", article.get("quality_score", 0))
+                - source_penalty * source_counts.get(source_type, 0)
+                - domain_penalty * domain_counts.get(domain, 0)
+            )
+            return value, article.get("final_score", article.get("quality_score", 0))
+
+        best = max(remaining, key=display_score)
+        remaining.remove(best)
+        selected.append(best)
+        source_counts[best.get("source_type", "")] += 1
+        domain = get_domain(best.get("link", ""))
+        if domain:
+            domain_counts[domain] += 1
+
+    return selected
+
+
 def group_by_topics(articles: List[Dict[str, Any]], dedup_across_topics: bool = True) -> Dict[str, List[Dict[str, Any]]]:
-    """Group articles by their topics.
-    
-    Args:
-        articles: List of articles to group
-        dedup_across_topics: If True, ensure each article appears in only one topic
-                           (first topic by priority order)
-    """
-    topic_groups = {}
-    seen_article_ids: Set[str] = set()  # Track which articles have been placed
-    
-    # Topic priority order (higher priority topics get first pick)
-    # If an article matches multiple topics, it goes to the highest priority one
+    topic_groups: Dict[str, List[Dict[str, Any]]] = {}
+    seen_article_ids: Set[str] = set()
     topic_priority = {
-        "llm": 0,
-        "ai_agent": 1,
-        "crypto": 2,
-        "github": 3,
-        "trending": 4,
-        "uncategorized": 5,
+        "ai-models": 0,
+        "ai-agents": 1,
+        "ai-ecosystem": 2,
+        "technology": 3,
+        "developer-tools": 4,
+        "markets-business": 5,
+        "macro-policy": 6,
+        "world-affairs": 7,
+        "cybersecurity": 8,
+        "github": 9,
+        "trending": 13,
+        "uncategorized": 99,
     }
-    
-    # Sort topics by priority for deterministic assignment
+
     def get_topic_priority(topic: str) -> int:
         return topic_priority.get(topic, 99)
-    
+
     for article in articles:
-        topics = article.get("topics", [])
-        if not topics:
-            topics = ["uncategorized"]
-        
-        # Sort topics by priority to pick the best one
+        topics = article.get("topics", []) or ["uncategorized"]
         sorted_topics = sorted(topics, key=get_topic_priority)
-        
-        # Create unique article ID for tracking
         article_id = normalize_title(article.get("title", ""))
-        
-        if dedup_across_topics:
-            # Check if this article has already been assigned to a topic
-            if article_id in seen_article_ids:
-                logging.debug(f"Skip duplicate across topics: '{article.get('title', '')[:50]}...'")
-                continue
-            seen_article_ids.add(article_id)
-        
-        # Assign to first (highest priority) topic
+
+        if dedup_across_topics and article_id in seen_article_ids:
+            continue
+        seen_article_ids.add(article_id)
+
         primary_topic = sorted_topics[0]
-        
-        if primary_topic not in topic_groups:
-            topic_groups[primary_topic] = []
-        
-        # Add copy with single topic for cleaner grouping
+        topic_groups.setdefault(primary_topic, [])
         article_copy = article.copy()
         article_copy["primary_topic"] = primary_topic
-        article_copy["all_topics"] = topics  # Keep original topics for reference
+        article_copy["all_topics"] = topics
         topic_groups[primary_topic].append(article_copy)
-    
-    # Sort articles within each topic by quality score
-    for topic in topic_groups:
-        topic_groups[topic].sort(key=lambda x: x.get("quality_score", 0), reverse=True)
-        
+
+    for topic, topic_articles in topic_groups.items():
+        ordered = sorted(topic_articles, key=lambda item: item.get("final_score", item.get("quality_score", 0)), reverse=True)
+        topic_groups[topic] = rerank_topic_articles(ordered)
+
     return topic_groups
 
 
-def main():
-    """Main merge and scoring function."""
+def build_article(title: str, link: str, date: str, source_type: str, source_name: str, source_id: str, source_priority: int, topics: List[str], **extra: Any) -> Dict[str, Any]:
+    article = {
+        "title": title,
+        "link": link,
+        "date": date,
+        "source_type": source_type,
+        "source_name": source_name,
+        "source_id": source_id,
+        "source_priority": source_priority,
+        "topics": topics,
+    }
+    article.update(extra)
+    return article
+
+
+def collect_articles(
+    rss_data: Dict[str, Any],
+    twitter_data: Dict[str, Any],
+    google_data: Dict[str, Any],
+    github_data: Dict[str, Any],
+    trending_data: Dict[str, Any],
+    reddit_data: Dict[str, Any],
+    api_data: Dict[str, Any],
+    v2ex_data: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    all_articles: List[Dict[str, Any]] = []
+
+    for source in rss_data.get("sources", []):
+        for article in source.get("articles", []):
+            enriched = article.copy()
+            enriched.update({
+                "source_type": "rss",
+                "source_name": source.get("name", ""),
+                "source_id": source.get("source_id", ""),
+                "source_priority": normalize_priority(source.get("priority", 3)),
+            })
+            all_articles.append(enriched)
+
+    for source in twitter_data.get("sources", []):
+        for article in source.get("articles", []):
+            enriched = article.copy()
+            enriched.update({
+                "source_type": "twitter",
+                "source_name": f"@{source.get('handle', '')}",
+                "display_name": source.get("name", ""),
+                "source_id": source.get("source_id", ""),
+                "source_priority": normalize_priority(source.get("priority", 3)),
+            })
+            all_articles.append(enriched)
+
+    for topic_result in google_data.get("topics", []):
+        for article in topic_result.get("articles", []):
+            enriched = article.copy()
+            enriched.update({
+                "source_type": "google",
+                "source_name": "Google News",
+                "source_id": f"google-{topic_result.get('topic_id', '')}",
+                "source_priority": 3,
+            })
+            all_articles.append(enriched)
+
+    for source in github_data.get("sources", []):
+        for article in source.get("articles", []):
+            enriched = article.copy()
+            enriched.update({
+                "source_type": "github",
+                "source_name": source.get("name", ""),
+                "source_id": source.get("source_id", ""),
+                "source_priority": normalize_priority(source.get("priority", 3)),
+            })
+            all_articles.append(enriched)
+
+    for source in reddit_data.get("subreddits", []):
+        for article in source.get("articles", []):
+            enriched = article.copy()
+            enriched.update({
+                "source_type": "reddit",
+                "source_name": f"r/{source.get('subreddit', '')}",
+                "source_id": source.get("source_id", ""),
+                "source_priority": normalize_priority(source.get("priority", 3)),
+            })
+            all_articles.append(enriched)
+
+    for source in api_data.get("sources", []):
+        for article in source.get("articles", []):
+            enriched = article.copy()
+            enriched.update({
+                "source_type": "api",
+                "source_name": source.get("name", ""),
+                "source_id": source.get("source_id", ""),
+                "source_priority": normalize_priority(source.get("priority", 3)),
+            })
+            all_articles.append(enriched)
+
+    for source in v2ex_data.get("sources", []):
+        for article in source.get("articles", []):
+            enriched = article.copy()
+            enriched.update({
+                "source_type": "v2ex",
+                "source_name": source.get("name", ""),
+                "source_id": source.get("source_id", ""),
+                "source_priority": normalize_priority(source.get("priority", 3)),
+            })
+            all_articles.append(enriched)
+
+    for repo in trending_data.get("repos", []):
+        all_articles.append(
+            build_article(
+                title=f"{repo['repo']}: {repo['description']}" if repo.get("description") else repo["repo"],
+                link=repo.get("url", f"https://github.com/{repo['repo']}"),
+                date=repo.get("pushed_at", ""),
+                source_type="github_trending",
+                source_name="GitHub Trending",
+                source_id=f"trending-{repo.get('repo', '')}",
+                source_priority=4,
+                topics=repo.get("topics", []),
+                snippet=repo.get("description", ""),
+                stars=repo.get("stars", 0),
+                daily_stars_est=repo.get("daily_stars_est", 0),
+                forks=repo.get("forks", 0),
+                language=repo.get("language", ""),
+            )
+        )
+
+    return all_articles
+
+
+def main() -> int:
     parser = argparse.ArgumentParser(
         description="Merge articles from all sources with quality scoring and deduplication.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-    python3 merge-sources.py --rss rss.json --twitter twitter.json --web web.json
-    python3 merge-sources.py --rss rss.json --output merged.json --verbose
-    python3 merge-sources.py --archive-dir workspace/archive/tech-digest
-        """
     )
-    
-    parser.add_argument(
-        "--rss",
-        type=Path,
-        help="RSS fetch results JSON file"
-    )
-    
-    parser.add_argument(
-        "--twitter",
-        type=Path,
-        help="Twitter fetch results JSON file"
-    )
-    
-    parser.add_argument(
-        "--web",
-        type=Path,
-        help="Web search results JSON file"
-    )
-    
-    parser.add_argument(
-        "--github",
-        type=Path,
-        help="GitHub releases results JSON file"
-    )
-    
-    parser.add_argument(
-        "--trending",
-        type=Path,
-        help="GitHub trending repos JSON file"
-    )
-    
-    parser.add_argument(
-        "--reddit",
-        type=Path,
-        help="Reddit posts results JSON file"
-    )
-    
-    parser.add_argument(
-        "--crawler",
-        type=Path,
-        help="Crawler/API sources results JSON file"
-    )
-    
-    parser.add_argument(
-        "--output", "-o",
-        type=Path,
-        help="Output JSON path (default: auto-generated temp file)"
-    )
-    
-    parser.add_argument(
-        "--archive-dir",
-        type=Path,
-        help="Archive directory for previous digest penalty"
-    )
-    
-    parser.add_argument(
-        "--verbose", "-v",
-        action="store_true",
-        help="Enable verbose logging"
-    )
-    
+    parser.add_argument("--rss", type=Path, help="RSS fetch results JSON file")
+    parser.add_argument("--twitter", type=Path, help="Twitter fetch results JSON file")
+    parser.add_argument("--google", type=Path, help="Google News results JSON file")
+    parser.add_argument("--web", dest="google", type=Path, help="Legacy alias for Google News results JSON file")
+    parser.add_argument("--github", type=Path, help="GitHub releases results JSON file")
+    parser.add_argument("--trending", type=Path, help="GitHub trending repos JSON file")
+    parser.add_argument("--reddit", type=Path, help="Reddit posts results JSON file")
+    parser.add_argument("--api", type=Path, help="API sources results JSON file")
+    parser.add_argument("--v2ex", type=Path, help="V2EX hot topics results JSON file")
+    parser.add_argument("--output", "-o", type=Path, help="Output JSON path (default: auto-generated temp file)")
+    parser.add_argument("--archive-dir", type=Path, help="Archive directory for previous digest penalty")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
     args = parser.parse_args()
+
     logger = setup_logging(args.verbose)
-    
-    # Auto-generate unique output path if not specified
     if not args.output:
-        fd, temp_path = tempfile.mkstemp(prefix="tech-news-digest-merged-", suffix=".json")
+        fd, temp_path = tempfile.mkstemp(prefix="news-digest-merged-", suffix=".json")
         os.close(fd)
         args.output = Path(temp_path)
-    
+
     try:
-        # Load source data
         rss_data = load_source_data(args.rss)
         twitter_data = load_source_data(args.twitter)
-        web_data = load_source_data(args.web)
+        google_data = load_source_data(args.google)
         github_data = load_source_data(args.github)
-        trending_data = load_source_data(args.trending) if hasattr(args, "trending") else None
+        trending_data = load_source_data(args.trending)
         reddit_data = load_source_data(args.reddit)
-        crawler_data = load_source_data(args.crawler) if hasattr(args, "crawler") else None
-        
-        logger.info(f"Loaded sources - RSS: {rss_data.get('total_articles', 0)}, "
-                   f"Twitter: {twitter_data.get('total_articles', 0)}, "
-                   f"Web: {web_data.get('total_articles', 0)}, "
-                   f"GitHub: {github_data.get('total_articles', 0)} releases + {trending_data.get('total', 0) if trending_data else 0} trending, "
-                   f"Reddit: {reddit_data.get('total_posts', 0)}, "
-                   f"Crawler: {crawler_data.get('total_articles', 0) if crawler_data else 0}")
-        
-        # Collect all articles with source context
-        all_articles = []
-        
-        # Process RSS articles
-        for source in rss_data.get("sources", []):
-            for article in source.get("articles", []):
-                article["source_type"] = "rss"
-                article["source_name"] = source.get("name", "")
-                article["source_id"] = source.get("source_id", "")
-                article["quality_score"] = calculate_base_score(article, source)
-                all_articles.append(article)
-        
-        # Process Twitter articles
-        for source in twitter_data.get("sources", []):
-            for article in source.get("articles", []):
-                article["source_type"] = "twitter"
-                article["source_name"] = f"@{source.get('handle', '')}"
-                article["display_name"] = source.get("name", "")
-                article["source_id"] = source.get("source_id", "")
-                article["quality_score"] = calculate_base_score(article, source)
-                all_articles.append(article)
-        
-        # Process Web articles
-        for topic_result in web_data.get("topics", []):
-            for article in topic_result.get("articles", []):
-                article["source_type"] = "web"
-                article["source_name"] = "Web Search"
-                article["source_id"] = f"web-{topic_result.get('topic_id', '')}"
-                # Build a minimal source dict so web articles go through the same scoring
-                web_source = {
-                    "source_type": "web",
-                    "priority": False,
-                }
-                article["quality_score"] = calculate_base_score(article, web_source)
-                all_articles.append(article)
-        
-        # Process GitHub articles
-        for source in github_data.get("sources", []):
-            for article in source.get("articles", []):
-                article["source_type"] = "github"
-                article["source_name"] = source.get("name", "")
-                article["source_id"] = source.get("source_id", "")
-                article["quality_score"] = calculate_base_score(article, source)
-                all_articles.append(article)
-        
-        # Process Reddit articles
-        for source in reddit_data.get("subreddits", []):
-            for article in source.get("articles", []):
-                article["source_type"] = "reddit"
-                article["source_name"] = f"r/{source.get('subreddit', '')}"
-                article["source_id"] = source.get("source_id", "")
-                reddit_source = {
-                    "source_type": "reddit",
-                    "priority": source.get("priority", False),
-                }
-                article["quality_score"] = calculate_base_score(article, reddit_source)
-                # Reddit score bonus
-                score = article.get("score", 0)
-                if score > 500:
-                    article["quality_score"] += 5
-                elif score > 200:
-                    article["quality_score"] += 3
-                elif score > 100:
-                    article["quality_score"] += 1
-                all_articles.append(article)
-        
-        # Process Crawler articles (Hacker News, V2EX, Weibo, etc.)
-        if crawler_data:
-            for source in crawler_data.get("sources", []):
-                for article in source.get("articles", []):
-                    article["source_type"] = "crawler"
-                    article["source_name"] = source.get("name", "")
-                    article["source_id"] = source.get("source_id", "")
-                    crawler_source = {
-                        "source_type": "crawler",
-                        "priority": source.get("priority", False),
-                    }
-                    article["quality_score"] = calculate_base_score(article, crawler_source)
-                    # Crawler heat bonus (e.g., HN points, V2EX replies)
-                    heat = article.get("heat", "")
-                    if heat:
-                        try:
-                            if "points" in heat:
-                                points = int(heat.split()[0])
-                                if points >= 500:
-                                    article["quality_score"] += 5
-                                elif points >= 200:
-                                    article["quality_score"] += 3
-                                elif points >= 100:
-                                    article["quality_score"] += 2
-                            elif "replies" in heat:
-                                replies = int(heat.split()[0])
-                                if replies >= 100:
-                                    article["quality_score"] += 3
-                                elif replies >= 50:
-                                    article["quality_score"] += 2
-                                elif replies >= 20:
-                                    article["quality_score"] += 1
-                        except (ValueError, IndexError):
-                            pass
-                    all_articles.append(article)
+        api_data = load_source_data(args.api)
+        v2ex_data = load_source_data(args.v2ex)
 
+        logger.info(
+            "Loaded sources - RSS: %s, Twitter: %s, Google: %s, GitHub: %s + %s trending, Reddit: %s, API: %s, V2EX: %s",
+            rss_data.get("total_articles", 0),
+            twitter_data.get("total_articles", 0),
+            google_data.get("total_articles", 0),
+            github_data.get("total_articles", 0),
+            trending_data.get("total", 0),
+            reddit_data.get("total_posts", 0),
+            api_data.get("total_articles", 0) if api_data else 0,
+            v2ex_data.get("total_articles", 0) if v2ex_data else 0,
+        )
 
-        # Load GitHub trending repos
-        if trending_data:
-            for repo in trending_data.get("repos", []):
-                article = {
-                    "title": f"{repo['repo']}: {repo['description']}" if repo.get('description') else repo['repo'],
-                    "link": repo.get("url", f"https://github.com/{repo['repo']}"),
-                    "snippet": repo.get("description", ""),
-                    "date": repo.get("pushed_at", ""),
-                    "source": "github-trending",
-                    "source_type": "github_trending",
-                    "topics": repo.get("topics", []),
-                    "stars": repo.get("stars", 0),
-                    "daily_stars_est": repo.get("daily_stars_est", 0),
-                    "forks": repo.get("forks", 0),
-                    "language": repo.get("language", ""),
-                    "quality_score": 5 + min(10, repo.get("daily_stars_est", 0) // 10),
-                }
-                all_articles.append(article)
+        all_articles = collect_articles(
+            rss_data,
+            twitter_data,
+            google_data,
+            github_data,
+            trending_data,
+            reddit_data,
+            api_data,
+            v2ex_data,
+        )
         total_collected = len(all_articles)
-        logger.info(f"Total articles collected: {total_collected}")
-        
-        # Load previous digest titles for penalty
-        previous_titles = set()
+        logger.info("Total articles collected: %d", total_collected)
+
+        previous_titles: List[str] = []
         if args.archive_dir:
             previous_titles = load_previous_digests(args.archive_dir)
-        
-        # Apply previous digest penalty
-        all_articles = apply_previous_digest_penalty(all_articles, previous_titles)
-        
-        # Merge multi-source articles
-        all_articles = merge_article_sources(all_articles)
-        logger.info(f"After merging multi-source: {len(all_articles)}")
-        
-        # Deduplicate articles
-        all_articles = deduplicate_articles(all_articles)
-        
-        # Group by topics (with cross-topic deduplication)
+
+        all_articles = deduplicate_articles(all_articles, previous_titles)
         topic_groups = group_by_topics(all_articles, dedup_across_topics=True)
-        
-        # Apply per-topic domain limits (max 3 articles per domain per topic)
+
         for topic in topic_groups:
             before = len(topic_groups[topic])
             topic_groups[topic] = apply_domain_limits(topic_groups[topic])
             after = len(topic_groups[topic])
             if before != after:
-                logger.info(f"Domain limits ({topic}): {before} → {after}")
-        
-        # Recalculate total after domain limits
-        total_after_domain_limits = sum(len(articles) for articles in topic_groups.values())
+                logger.info("Domain limits (%s): %d → %d", topic, before, after)
 
+        total_after_domain_limits = sum(len(items) for items in topic_groups.values())
+        topic_counts = {topic: len(items) for topic, items in topic_groups.items()}
 
-        topic_counts = {topic: len(articles) for topic, articles in topic_groups.items()}
-        
         output = {
             "generated": datetime.now(timezone.utc).isoformat(),
             "input_sources": {
                 "rss_articles": rss_data.get("total_articles", 0),
-                "twitter_articles": twitter_data.get('total_articles', 0),
-                "web_articles": web_data.get('total_articles', 0),
-                "github_articles": github_data.get('total_articles', 0),
-                "github_trending": trending_data.get('total', 0) if trending_data else 0,
-                "reddit_posts": reddit_data.get('total_posts', 0),
-                "crawler_articles": crawler_data.get('total_articles', 0) if crawler_data else 0,
-                "total_input": total_collected
+                "twitter_articles": twitter_data.get("total_articles", 0),
+                "google_articles": google_data.get("total_articles", 0),
+                "github_articles": github_data.get("total_articles", 0),
+                "github_trending": trending_data.get("total", 0),
+                "reddit_posts": reddit_data.get("total_posts", 0),
+                "api_articles": api_data.get("total_articles", 0) if api_data else 0,
+                "v2ex_articles": v2ex_data.get("total_articles", 0) if v2ex_data else 0,
+                "total_input": total_collected,
             },
             "processing": {
                 "deduplication_applied": True,
                 "multi_source_merging": True,
                 "previous_digest_penalty": len(previous_titles) > 0,
-                "quality_scoring": True
+                "quality_scoring": True,
+                "scoring_version": "2.0",
             },
             "output_stats": {
                 "total_articles": total_after_domain_limits,
                 "topics_count": len(topic_groups),
-                "topic_distribution": topic_counts
+                "topic_distribution": topic_counts,
             },
             "topics": {
-                topic: {
-                    "count": len(articles),
-                    "articles": articles
-                } for topic, articles in topic_groups.items()
-            }
+                topic: {"count": len(items), "articles": items}
+                for topic, items in topic_groups.items()
+            },
         }
-        
-        # Write output
-        json_str = json.dumps(output, ensure_ascii=False, indent=2)
-        with open(args.output, "w", encoding='utf-8') as f:
-            f.write(json_str)
-        
-        logger.info(f"✅ Merged and scored articles:")
-        logger.info(f"   Input: {total_collected} articles")
-        logger.info(f"   Output: {total_after_domain_limits} articles across {len(topic_groups)} topics")
-        logger.info(f"   File: {args.output}")
-        
+
+        with open(args.output, "w", encoding="utf-8") as handle:
+            json.dump(output, handle, ensure_ascii=False, indent=2)
+
+        logger.info("✅ Merged and scored articles:")
+        logger.info("   Input: %d articles", total_collected)
+        logger.info("   Output: %d articles across %d topics", total_after_domain_limits, len(topic_groups))
+        logger.info("   File: %s", args.output)
         return 0
-        
-    except Exception as e:
-        logger.error(f"💥 Merge failed: {e}")
+    except Exception as exc:
+        logger.error("💥 Merge failed: %s", exc)
         return 1
 
 

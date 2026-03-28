@@ -1,103 +1,127 @@
 {
-  "generated": "2026-02-27T12:04:12.666216+00:00",
+  "generated": "2026-03-28T04:43:00+00:00",
   "source_type": "web",
   "defaults_dir": "(redacted)",
   "config_dir": "(redacted)",
   "freshness": "pd",
   "api_used": "brave",
-  "topics_total": 4,
-  "topics_ok": 4,
-  "total_articles": 54,
+  "topics_total": 3,
+  "topics_ok": 3,
+  "total_articles": 6,
   "topics": [
     {
-      "topic_id": "llm",
+      "topic_id": "world-affairs",
       "status": "ok",
-      "queries_executed": 4,
-      "queries_ok": 3,
+      "queries_executed": 2,
+      "queries_ok": 2,
       "query_stats": [
         {
-          "query": "LLM latest news",
-          "status": "error",
-          "count": 0
+          "query": "world affairs latest",
+          "status": "ok",
+          "count": 3
         },
         {
-          "query": "large language model breakthroughs",
+          "query": "global conflict updates",
           "status": "ok",
-          "count": 5
-        },
-        {
-          "query": "大模型最新动态",
-          "status": "ok",
-          "count": 5
-        },
-        {
-          "query": "GPT Claude Gemini updates",
-          "status": "ok",
-          "count": 5
+          "count": 3
         }
       ],
-      "count": 12,
+      "count": 2,
       "articles": [
         {
-          "title": "Large language model - Wikipedia",
-          "link": "https://en.wikipedia.org/wiki/Large_language_model",
-          "snippet": "Moving beyond n-gram models, researchers started in 2000 to use neural networks to learn language models. Following the breakthrough of deep neural networks in image classification around 2012, similar architectures were adapted for language tasks. This shift was marked by the development of word embeddings (eg, Word2Vec by Mikolov in 2013) and sequence-to-sequence (seq2seq) models using LSTM.",
-          "date": "2026-02-27T12:03:55.881121+00:00",
+          "title": "Global shipping routes stay under pressure as regional conflict risk persists",
+          "link": "https://example.com/global-shipping-conflict-risk",
+          "snippet": "Diplomatic tensions and security concerns continue to affect logistics and energy markets.",
+          "date": "2026-03-28T03:30:00+00:00",
           "topics": [
-            "llm"
+            "world-affairs"
           ]
         },
         {
-          "title": "LLM News Today (February 2026) – Open Source LLM Updates & AI Model Releases",
-          "link": "https://llm-stats.com/ai-news",
-          "snippet": "Our AI Model Releases This Week section shows new AI model releases last 24 hours and large language model updates with benchmark performance scores. This covers AI model updates from OpenAI, Anthropic, and open source LLM release news. For historical data, check our New Models page. Our LLM Research News section covers the latest LLM research updates from academic papers, AI labs, and industry publications. We track LLM research news today including breakthroughs in LLM infrastructure news, inference optimization, and AI model development.",
-          "date": "2026-02-27T12:03:55.881149+00:00",
+          "title": "European leaders debate sanctions and defense coordination",
+          "link": "https://example.com/europe-sanctions-defense-coordination",
+          "snippet": "The latest talks highlight the growing overlap between diplomacy, security and industrial policy.",
+          "date": "2026-03-28T02:15:00+00:00",
           "topics": [
-            "llm"
+            "world-affairs"
           ]
         }
       ]
     },
     {
-      "topic_id": "ai-agent",
+      "topic_id": "macro-policy",
       "status": "ok",
-      "queries_executed": 3,
-      "queries_ok": 3,
+      "queries_executed": 2,
+      "queries_ok": 2,
       "query_stats": [
         {
-          "query": "AI Agent latest developments",
+          "query": "macro policy latest",
           "status": "ok",
-          "count": 5
+          "count": 3
         },
         {
-          "query": "autonomous agent framework",
+          "query": "central bank policy update",
           "status": "ok",
-          "count": 5
-        },
-        {
-          "query": "AI assistant breakthrough",
-          "status": "ok",
-          "count": 5
+          "count": 3
         }
       ],
-      "count": 7,
+      "count": 2,
       "articles": [
         {
-          "title": "Perplexity announces \"Computer,\" an AI agent that assigns work to other AI agents - Ars Technica",
-          "link": "https://arstechnica.com/ai/2026/02/perplexity-announces-computer-an-ai-agent-that-assigns-work-to-other-ai-agents/",
-          "snippet": "Perplexity Computer aims to button up, refine, and contain the wild power of the viral OpenClaw agentic AI tool—competing with the likes of Claude Cowork—by optimizing subtasks by selecting models best suited to them.",
-          "date": "2026-02-27T12:03:59.523833+00:00",
+          "title": "Rate-cut expectations cool as inflation data surprises to the upside",
+          "link": "https://example.com/rate-cut-expectations-cool",
+          "snippet": "Fresh inflation prints are pushing traders to rethink the timing of policy easing.",
+          "date": "2026-03-28T01:55:00+00:00",
           "topics": [
-            "ai-agent"
+            "macro-policy"
           ]
         },
         {
-          "title": "AI Agent Store: AI Agent Marketplace/Directory, AI Agency list",
-          "link": "https://aiagentstore.ai",
-          "snippet": "Each AI agent listing includes detailed descriptions, user reviews, and ratings to help you make informed decisions. If you&#x27;ve developed an AI agent, list it on our platform to gain visibility and connect with potential users.",
-          "date": "2026-02-27T12:03:59.523857+00:00",
+          "title": "Central banks widen scrutiny of AI-linked concentration in capital spending",
+          "link": "https://example.com/central-banks-ai-capex-scrutiny",
+          "snippet": "Officials are increasingly watching how AI investment cycles shape financial conditions.",
+          "date": "2026-03-28T00:35:00+00:00",
           "topics": [
-            "ai-agent"
+            "macro-policy"
+          ]
+        }
+      ]
+    },
+    {
+      "topic_id": "ai-ecosystem",
+      "status": "ok",
+      "queries_executed": 2,
+      "queries_ok": 2,
+      "query_stats": [
+        {
+          "query": "AI chip news",
+          "status": "ok",
+          "count": 3
+        },
+        {
+          "query": "Tesla SpaceX robotics AI",
+          "status": "ok",
+          "count": 3
+        }
+      ],
+      "count": 2,
+      "articles": [
+        {
+          "title": "AI server vendors, memory makers and chip designers rally together",
+          "link": "https://example.com/ai-server-vendors-memory-makers-rally",
+          "snippet": "The market is increasingly treating AI hardware, memory and cloud capex as one trade.",
+          "date": "2026-03-28T03:05:00+00:00",
+          "topics": [
+            "ai-ecosystem"
+          ]
+        },
+        {
+          "title": "SpaceX, Tesla and robotics suppliers anchor the new physical AI narrative",
+          "link": "https://example.com/physical-ai-narrative",
+          "snippet": "Investors are broadening AI exposure from software into launch, mobility and robotics chains.",
+          "date": "2026-03-27T23:45:00+00:00",
+          "topics": [
+            "ai-ecosystem"
           ]
         }
       ]

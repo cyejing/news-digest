@@ -1,103 +1,111 @@
 {
-  "generated": "2026-02-27T12:03:19.744288+00:00",
+  "generated": "2026-03-28T04:40:00+00:00",
   "source_type": "rss",
   "defaults_dir": "(redacted)",
   "config_dir": "(redacted)",
   "hours": 24,
   "feedparser_available": true,
-  "sources_total": 49,
-  "sources_ok": 48,
-  "total_articles": 282,
+  "sources_total": 3,
+  "sources_ok": 3,
+  "total_articles": 6,
   "sources": [
     {
-      "source_id": "theblock-rss",
+      "source_id": "nvidia-ai-rss",
       "source_type": "rss",
-      "name": "The Block",
-      "url": "https://www.theblock.co/rss.xml",
-      "priority": true,
+      "name": "NVIDIA AI Blog",
+      "url": "https://blogs.nvidia.com/feed/",
+      "priority": 9,
       "topics": [
-        "crypto"
+        "ai-ecosystem",
+        "technology"
       ],
       "status": "ok",
       "attempts": 1,
-      "count": 20,
+      "count": 2,
       "articles": [
         {
-          "title": "ZKsync sets May 4 deprecation date for Lite as project consolidates around Era",
-          "link": "https://www.theblock.co/post/391555/zksync-sets-may-4-deprecation-date-for-lite-as-project-consolidates-around-era?utm_source=rss&utm_medium=rss",
-          "date": "2026-02-27T11:31:13+00:00",
+          "title": "NVIDIA expands Blackwell deployments as AI infrastructure demand accelerates",
+          "link": "https://blogs.nvidia.com/blog/blackwell-ai-infrastructure-demand/",
+          "date": "2026-03-28T03:20:00+00:00",
           "topics": [
-            "crypto"
+            "ai-ecosystem",
+            "technology"
           ]
         },
         {
-          "title": "Minnesota introduces bill to ban crypto kiosks after wave of elder fraud cases",
-          "link": "https://www.theblock.co/post/391541/minnesota-introduces-bill-to-ban-crypto-kiosks?utm_source=rss&utm_medium=rss",
-          "date": "2026-02-27T10:36:32+00:00",
+          "title": "Humanoid robotics teams adopt new simulation and GPU training workflows",
+          "link": "https://blogs.nvidia.com/blog/humanoid-robotics-gpu-training/",
+          "date": "2026-03-28T01:10:00+00:00",
           "topics": [
-            "crypto"
+            "ai-ecosystem",
+            "technology"
           ]
         }
       ]
     },
     {
-      "source_id": "coindesk-rss",
+      "source_id": "techcrunch-ai-rss",
       "source_type": "rss",
-      "name": "CoinDesk",
-      "url": "https://www.coindesk.com/arc/outboundfeeds/rss/",
-      "priority": true,
+      "name": "TechCrunch AI",
+      "url": "https://techcrunch.com/category/artificial-intelligence/feed/",
+      "priority": 7,
       "topics": [
-        "crypto"
+        "ai-models",
+        "ai-agents",
+        "ai-ecosystem"
       ],
       "status": "ok",
       "attempts": 1,
-      "count": 20,
+      "count": 2,
       "articles": [
         {
-          "title": "Bitcoin falls with ether, solana while decred, AI-linked tokens advance",
-          "link": "https://www.coindesk.com/markets/2026/02/27/bitcoin-falls-with-ether-solana-while-decred-ai-linked-tokens-advance",
-          "date": "2026-02-27T11:49:09+00:00",
+          "title": "Tesla supplier chain rides new optimism around humanoid robot production",
+          "link": "https://techcrunch.com/2026/03/28/tesla-supplier-chain-humanoid-robots/",
+          "date": "2026-03-28T02:35:00+00:00",
           "topics": [
-            "crypto"
+            "ai-ecosystem"
           ]
         },
         {
-          "title": "MARA and Block jump double digits in pre-market trading while CoreWeave sinks",
-          "link": "https://www.coindesk.com/markets/2026/02/27/mara-and-block-jump-double-digits-in-pre-market-trading-while-coreweave-sinks",
-          "date": "2026-02-27T10:49:19+00:00",
+          "title": "AI chip makers and memory vendors rally as hyperscaler spending climbs",
+          "link": "https://techcrunch.com/2026/03/28/ai-chip-memory-vendors-rally/",
+          "date": "2026-03-28T00:55:00+00:00",
           "topics": [
-            "crypto"
+            "ai-ecosystem"
           ]
         }
       ]
     },
     {
-      "source_id": "hn-rss",
+      "source_id": "fed-monetary-policy-rss",
       "source_type": "rss",
-      "name": "Hacker News Frontpage",
-      "url": "https://hnrss.org/frontpage",
-      "priority": true,
+      "name": "Federal Reserve Monetary Policy",
+      "url": "https://www.federalreserve.gov/feeds/press_monetary.xml",
+      "priority": 9,
       "topics": [
-        "frontier-tech"
+        "markets-business",
+        "macro-policy"
       ],
       "status": "ok",
       "attempts": 1,
-      "count": 20,
+      "count": 2,
       "articles": [
         {
-          "title": "Lawmakers say US Military used laser to take down Border Protection drone in TX",
-          "link": "https://apnews.com/article/military-laser-border-drone-texas-airport-55aaab7093f7d6dd174f909f3875001c",
-          "date": "2026-02-27T11:37:49+00:00",
+          "title": "Federal Reserve holds rates steady and signals data-dependent path",
+          "link": "https://www.federalreserve.gov/newsevents/pressreleases/monetary20260328a.htm",
+          "date": "2026-03-28T03:00:00+00:00",
           "topics": [
-            "frontier-tech"
+            "markets-business",
+            "macro-policy"
           ]
         },
         {
-          "title": "MitID, Denmarks sole digital ID, has been down for over an hour and counting",
-          "link": "https://www.digitaliser.dk/mitid/nyt-fra-mitid/2026/feb/driftsforstyrrelser-mitid",
-          "date": "2026-02-27T10:52:07+00:00",
+          "title": "Board releases updated economic projections for inflation and employment",
+          "link": "https://www.federalreserve.gov/newsevents/pressreleases/monetary20260328b.htm",
+          "date": "2026-03-28T02:45:00+00:00",
           "topics": [
-            "frontier-tech"
+            "markets-business",
+            "macro-policy"
           ]
         }
       ]

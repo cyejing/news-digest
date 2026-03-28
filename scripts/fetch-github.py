@@ -2,7 +2,7 @@
 """
 Fetch GitHub releases from unified sources configuration.
 
-Reads sources.json, filters GitHub sources, fetches releases in parallel with retry
+Reads sources.json, filters GitHub sources, fetches releases sequentially with retry
 mechanism, and outputs structured JSON with releases tagged by topics.
 
 Usage:
@@ -18,20 +18,40 @@ import logging
 import time
 import tempfile
 from datetime import datetime, timedelta, timezone
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.request import urlopen, Request
 from urllib.error import HTTPError
 from urllib.parse import quote
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 
-TIMEOUT = 30
-MAX_WORKERS = 10
+TIMEOUT = 60
 MAX_RELEASES_PER_REPO = 20
 RETRY_COUNT = 2
 RETRY_DELAY = 2.0  # seconds
-GITHUB_CACHE_PATH = "/tmp/tech-news-digest-github-cache.json"
+GITHUB_CACHE_PATH = "/tmp/news-digest-github-cache.json"
 GITHUB_CACHE_TTL_HOURS = 24
+GITHUB_COOLDOWN_ENV = "NEWS_DIGEST_GITHUB_COOLDOWN_SECONDS"
+GITHUB_COOLDOWN_DEFAULT = 2.0
+
+
+def normalize_priority(priority: Any, default: int = 3) -> int:
+    """Normalize source priority into a 1-10 score."""
+    if isinstance(priority, bool):
+        return 8 if priority else default
+    try:
+        value = int(priority)
+    except (TypeError, ValueError):
+        return default
+    return max(1, min(10, value))
+
+
+def get_github_cooldown_seconds() -> float:
+    """Get sequential request cooldown for GitHub release fetches."""
+    raw = os.environ.get(GITHUB_COOLDOWN_ENV, str(GITHUB_COOLDOWN_DEFAULT))
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return GITHUB_COOLDOWN_DEFAULT
 
 
 def _b64url(data: bytes) -> str:
@@ -81,7 +101,7 @@ def _generate_github_app_token(app_id: str, install_id: str, key_file: str) -> s
         headers={
             'Authorization': f'Bearer {jwt}',
             'Accept': 'application/vnd.github+json',
-            'User-Agent': 'tech-news-digest',
+            'User-Agent': 'news-digest',
         },
     )
     with urlopen(req, timeout=15) as resp:
@@ -119,7 +139,7 @@ def strip_markdown(text: str) -> str:
     return text.strip()
 
 
-def truncate_summary(text: str, max_chars: int = 200) -> str:
+def truncate_summary(text: str, max_chars: int = 500) -> str:
     """Truncate text to specified length with ellipsis."""
     if not text:
         return ""
@@ -257,7 +277,7 @@ def fetch_releases_with_retry(source: Dict[str, Any], cutoff: datetime, github_t
     source_id = source["id"]
     name = source["name"]
     repo = source["repo"]
-    priority = source["priority"]
+    priority = normalize_priority(source.get("priority"))
     topics = source["topics"]
     
     repo_name = get_repo_name(repo)
@@ -265,7 +285,7 @@ def fetch_releases_with_retry(source: Dict[str, Any], cutoff: datetime, github_t
     
     # Setup headers
     headers = {
-        "User-Agent": "TechDigest/2.0",
+        "User-Agent": "NewsDigest/2.0",
         "Accept": "application/vnd.github.v3+json",
     }
     if github_token:
@@ -334,7 +354,7 @@ def fetch_releases_with_retry(source: Dict[str, Any], cutoff: datetime, github_t
                 title = f"{repo_name} {tag_name}"
                 link = release.get("html_url", "")
                 body = release.get("body", "")
-                summary = truncate_summary(body, 200)
+                summary = truncate_summary(body, 500)
                 
                 if title and link:
                     articles.append({
@@ -413,9 +433,9 @@ def load_sources(defaults_dir: Path, config_dir: Optional[Path] = None) -> List[
 def main():
     """Main GitHub releases fetching function."""
     parser = argparse.ArgumentParser(
-        description="Parallel GitHub releases fetcher for tech-news-digest. "
+        description="Sequential GitHub releases fetcher for news-digest. "
                    "Fetches enabled GitHub sources from unified configuration, "
-                   "filters by time window, and outputs structured release data.",
+                    "filters by time window, and outputs structured release data.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -489,7 +509,7 @@ Environment Variables:
     
     # Auto-generate unique output path if not specified
     if not args.output:
-        fd, temp_path = tempfile.mkstemp(prefix="tech-news-digest-github-", suffix=".json")
+        fd, temp_path = tempfile.mkstemp(prefix="news-digest-github-", suffix=".json")
         os.close(fd)
         args.output = Path(temp_path)
     
@@ -514,25 +534,31 @@ Environment Variables:
         # Initialize cache
         _get_github_cache(no_cache=args.no_cache)
         
+        cooldown_s = get_github_cooldown_seconds()
+        logger.info("GitHub sequential cooldown: %.1fs", cooldown_s)
+
         results = []
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-            futures = {pool.submit(fetch_releases_with_retry, source, cutoff, github_token, args.no_cache): source 
-                      for source in sources}
-            
-            for future in as_completed(futures):
-                result = future.result()
-                results.append(result)
-                
-                if result["status"] == "ok":
-                    logger.debug(f"✅ {result['name']}: {result['count']} releases")
-                else:
-                    logger.debug(f"❌ {result['name']}: {result['error']}")
+        last_finished_at: Optional[float] = None
+        for source in sources:
+            if last_finished_at is not None and cooldown_s > 0:
+                elapsed_since_last = time.time() - last_finished_at
+                if elapsed_since_last < cooldown_s:
+                    time.sleep(cooldown_s - elapsed_since_last)
+
+            result = fetch_releases_with_retry(source, cutoff, github_token, args.no_cache)
+            results.append(result)
+            last_finished_at = time.time()
+
+            if result["status"] == "ok":
+                logger.debug(f"✅ {result['name']}: {result['count']} releases")
+            else:
+                logger.debug(f"❌ {result['name']}: {result['error']}")
 
         # Flush conditional request cache
         _flush_github_cache()
         
-        # Sort: priority first, then by release count
-        results.sort(key=lambda x: (not x.get("priority", False), -x.get("count", 0)))
+        # Sort: higher priority first, then by release count
+        results.sort(key=lambda x: (-normalize_priority(x.get("priority")), -x.get("count", 0)))
 
         ok_count = sum(1 for r in results if r["status"] == "ok")
         total_articles = sum(r.get("count", 0) for r in results)
@@ -544,6 +570,7 @@ Environment Variables:
             "config_dir": str(args.config) if args.config else None,
             "hours": args.hours,
             "github_token_used": github_token is not None,
+            "cooldown_s": cooldown_s,
             "sources_total": len(results),
             "sources_ok": ok_count,
             "total_articles": total_articles,

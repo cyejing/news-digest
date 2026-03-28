@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Configuration overlay loader for tech-news-digest.
+Configuration overlay loader for news-digest.
 
 Handles loading and merging of default configurations with optional user overlays.
 Supports sources.json and topics.json with overlay logic for customization.
@@ -12,6 +12,44 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 
 logger = logging.getLogger(__name__)
+
+SOURCE_TYPES = ("rss", "twitter", "github", "reddit")
+
+
+def flatten_sources_config(config_data: Dict[str, Any], source_name: str) -> List[Dict[str, Any]]:
+    """Flatten sources config from type-grouped map into a single list."""
+    sources = config_data.get("sources", {})
+    if not isinstance(sources, dict):
+        raise ValueError(
+            f"Invalid {source_name} sources config: expected 'sources' to be an object keyed by type"
+        )
+
+    flattened: List[Dict[str, Any]] = []
+    for source_type, grouped_sources in sources.items():
+        if not isinstance(grouped_sources, list):
+            raise ValueError(
+                f"Invalid {source_name} sources config: expected '{source_type}' sources to be an array"
+            )
+        for source in grouped_sources:
+            if not isinstance(source, dict):
+                logger.warning(
+                    "Skipping non-object source in %s type %s: %r", source_name, source_type, source
+                )
+                continue
+
+            normalized = source.copy()
+            normalized_type = normalized.get("type", source_type)
+            if normalized_type != source_type:
+                logger.debug(
+                    "Source %s overrides type from %s to %s",
+                    normalized.get("id", "<unknown>"),
+                    source_type,
+                    normalized_type,
+                )
+            normalized["type"] = normalized_type
+            flattened.append(normalized)
+
+    return flattened
 
 
 def load_merged_sources(defaults_dir: Path, config_dir: Optional[Path] = None) -> List[Dict[str, Any]]:
@@ -39,7 +77,7 @@ def load_merged_sources(defaults_dir: Path, config_dir: Optional[Path] = None) -
     try:
         with open(defaults_path, 'r', encoding='utf-8') as f:
             defaults_data = json.load(f)
-        default_sources = defaults_data.get("sources", [])
+        default_sources = flatten_sources_config(defaults_data, "default")
         logger.debug(f"Loaded {len(default_sources)} default sources from {defaults_path}")
     except FileNotFoundError:
         raise FileNotFoundError(f"Default sources config not found: {defaults_path}")
@@ -61,13 +99,13 @@ def load_merged_sources(defaults_dir: Path, config_dir: Optional[Path] = None) -
     if config_dir is None:
         return default_sources
         
-    config_path = config_dir / "tech-news-digest-sources.json"
+    config_path = config_dir / "news-digest-sources.json"
     
     # Try to load user overlay
     try:
         with open(config_path, 'r', encoding='utf-8') as f:
             config_data = json.load(f)
-        user_sources = config_data.get("sources", [])
+        user_sources = flatten_sources_config(config_data, "user")
         logger.debug(f"Loaded {len(user_sources)} user sources from {config_path}")
     except FileNotFoundError:
         logger.debug(f"No user sources config found at {config_path}, using defaults only")
@@ -160,7 +198,7 @@ def load_merged_topics(defaults_dir: Path, config_dir: Optional[Path] = None) ->
     if config_dir is None:
         return default_topics
         
-    config_path = config_dir / "tech-news-digest-topics.json"
+    config_path = config_dir / "news-digest-topics.json"
     
     # Try to load user overlay
     try:
@@ -216,5 +254,3 @@ def load_merged_topics(defaults_dir: Path, config_dir: Optional[Path] = None) ->
     
     logger.info(f"Merged topics: {len(default_topics)} defaults + {len(user_topics)} user = {len(result)} total topics")
     return result
-
-
