@@ -2,6 +2,8 @@
 """Tests for run-pipeline.py helpers."""
 
 import importlib.util
+import json
+import os
 import tempfile
 import textwrap
 import unittest
@@ -61,6 +63,39 @@ class TestRunPipeline(unittest.TestCase):
 
             self.assertEqual(result.status, "error")
             self.assertIn("boom", result.stderr_tail[0])
+
+    def test_run_step_process_exports_defaults_and_config_env(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            script_path = Path(tmpdir) / "envcheck.py"
+            output_path = Path(tmpdir) / "out.json"
+            script_path.write_text(
+                textwrap.dedent(
+                    """
+                    import json, os, sys
+                    from pathlib import Path
+                    out = Path(sys.argv[sys.argv.index("--output") + 1])
+                    out.write_text(json.dumps({
+                        "defaults": os.environ.get("NEWS_HOTSPOTS_DEFAULTS_DIR"),
+                        "config": os.environ.get("NEWS_HOTSPOTS_CONFIG_DIR"),
+                    }), encoding="utf-8")
+                    """
+                ),
+                encoding="utf-8",
+            )
+            step = run_pipeline.StepSpec(
+                "test",
+                "Test",
+                str(script_path),
+                ["--defaults", "/tmp/defaults", "--config", "/tmp/config"],
+                output_path,
+            )
+
+            result = run_pipeline.run_step_process(step, timeout=10)
+
+            self.assertEqual(result.status, "ok")
+            payload = json.loads(output_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["defaults"], "/tmp/defaults")
+            self.assertEqual(payload["config"], "/tmp/config")
 
     def test_run_step_process_timeout(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -131,13 +166,13 @@ class TestRunPipeline(unittest.TestCase):
             "output_stats": {"total_articles": 6},
         }
         result = run_pipeline.make_process_result(
-            spec=run_pipeline.StepSpec("merge", "Merge", "merge-sources.py", [], None),
+            spec=run_pipeline.StepSpec("merge-sources", "Merge", "merge-sources.py", [], None),
             status="ok",
             timeout=300,
             elapsed_s=1.2,
         )
 
-        meta = run_pipeline.build_diagnostics(payload, result, "merge")
+        meta = run_pipeline.build_diagnostics(payload, result, "merge-sources")
 
         self.assertEqual(meta.details["processing"]["scoring_version"], "2.0")
         self.assertEqual(meta.details["deduplication"]["dropped"], 4)
@@ -203,13 +238,13 @@ class TestRunPipeline(unittest.TestCase):
 
     def test_build_diagnostics_uses_step_aggregate_failure_when_payload_has_no_items(self):
         result = run_pipeline.make_process_result(
-            spec=run_pipeline.StepSpec("merge", "Merge", "merge-sources.py", [], None),
+            spec=run_pipeline.StepSpec("merge-sources", "Merge", "merge-sources.py", [], None),
             status="error",
             timeout=300,
             stderr_tail=["merge failed badly"],
         )
 
-        meta = run_pipeline.build_diagnostics(None, result, "merge")
+        meta = run_pipeline.build_diagnostics(None, result, "merge-sources")
 
         self.assertEqual(meta.failed_items, [{"id": "__step__", "error": "merge failed badly"}])
 

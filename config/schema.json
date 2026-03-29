@@ -1,8 +1,31 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Tech Digest Configuration Schema",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "definitions": {
+    "apiSource": {
+      "type": "object",
+      "required": ["id", "name", "enabled", "topic", "priority"],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "topic": {
+          "type": "string"
+        },
+        "priority": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        }
+      }
+    },
     "source": {
       "type": "object",
       "required": ["id", "type", "name", "enabled", "priority", "topic"],
@@ -112,6 +135,32 @@
           "type": "string",
           "description": "Topic description"
         },
+        "classification": {
+          "type": "object",
+          "properties": {
+            "definition": {
+              "type": "string"
+            },
+            "when_to_use": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "when_not_to_use": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "examples": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
         "search": {
           "type": "object",
           "required": ["queries"],
@@ -157,10 +206,65 @@
         }
       }
     },
+    "topicRules": {
+      "type": "object",
+      "properties": {
+        "topic_priority": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Single-topic resolution priority from highest to lowest"
+        },
+        "legacy_topic_map": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Legacy topic IDs mapped into the current taxonomy"
+        },
+        "source_rules": {
+          "type": "object",
+          "properties": {
+            "v2ex": {
+              "type": "object",
+              "properties": {
+                "node_topic_map": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "keyword_map": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
     "sourceGroup": {
       "type": "array",
       "items": {
         "$ref": "#/definitions/source"
+      }
+    },
+    "apiSourceGroup": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/apiSource"
       }
     }
   },
@@ -189,6 +293,18 @@
       "type": "array",
       "items": {
         "$ref": "#/definitions/topic"
+      }
+    },
+    "topic_rules": {
+      "$ref": "#/definitions/topicRules"
+    },
+    "api_sources": {
+      "type": "object",
+      "required": ["sources"],
+      "properties": {
+        "sources": {
+          "$ref": "#/definitions/apiSourceGroup"
+        }
       }
     }
   }

@@ -14,7 +14,7 @@
       "queries_ok": 2,
       "query_stats": [
         {
-          "query": "LLM latest world-affairs",
+          "query": "LLM latest world news",
           "status": "ok",
           "count": 3
         },
@@ -28,7 +28,7 @@
       "articles": [
         {
           "title": "OpenAI and Anthropic push faster model release cadence",
-          "link": "https://example.com/ai-models-release-cadence",
+          "link": "https://example.com/ai-frontier-release-cadence",
           "snippet": "Model labs are accelerating release cycles while competing on quality, latency and tooling.",
           "date": "2026-03-28T04:10:00+00:00",
           "topic": "ai-frontier"
@@ -84,7 +84,7 @@
       "queries_ok": 2,
       "query_stats": [
         {
-          "query": "AI chip world-affairs",
+          "query": "AI chip world news",
           "status": "ok",
           "count": 3
         },

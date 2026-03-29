@@ -82,7 +82,7 @@ class TestFetchGithubTrending(unittest.TestCase):
                 result = fetch_github_trending.fetch_trending_repos(
                     hours=48,
                     github_token=None,
-                    defaults_dir=None,
+                    defaults_dir=DEFAULTS_DIR,
                     config_dir=None,
                 )
 
@@ -91,6 +91,18 @@ class TestFetchGithubTrending(unittest.TestCase):
         self.assertEqual(repos[0]["topic"], "github")
         self.assertEqual(result["queries_total"], 6)
         self.assertEqual(result["queries_ok"], 6)
+
+    def test_trending_returns_empty_when_no_queries_configured(self):
+        with patch.object(fetch_github_trending, "load_github_trending_queries", return_value=[]):
+            result = fetch_github_trending.fetch_trending_repos(
+                hours=48,
+                github_token=None,
+                defaults_dir=DEFAULTS_DIR,
+                config_dir=None,
+            )
+
+        self.assertEqual(result["repos"], [])
+        self.assertEqual(result["queries_total"], 0)
 
     def test_trending_results_track_query_failures(self):
         with patch.object(

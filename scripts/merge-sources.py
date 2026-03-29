@@ -53,6 +53,12 @@ SCORING_CONFIG = {
     "topic_first3_domain_penalty": 1.5,
 }
 
+SCORE_DEBUG_COMMENTS = {
+    "score_debug": "评分计算说明，只保留 final_score 公式和各项分值。",
+    "final_score": "merge-sources 阶段最终分，由多个分数组件相加得到。",
+    "topic_rerank_debug": "topic 内重排说明。为了来源多样性，会对重复 source/domain 施加惩罚后再排序。",
+}
+
 SCORE_ENGAGEMENT_VIRAL = 5
 SCORE_ENGAGEMENT_HIGH = 3
 SCORE_ENGAGEMENT_MED = 2
@@ -301,38 +307,99 @@ class UnionFind:
 
 
 def calculate_local_extra_score(article: Dict[str, Any], source_type: str) -> float:
+    return calculate_local_extra_details(article, source_type)["score"]
+
+
+def calculate_local_extra_details(article: Dict[str, Any], source_type: str) -> Dict[str, Any]:
     if source_type == "twitter":
         metrics = article.get("metrics", {})
         likes = metrics.get("like_count", 0)
         retweets = metrics.get("retweet_count", 0)
         replies = metrics.get("reply_count", 0)
         if likes >= 1000 or retweets >= 500 or replies >= 300:
-            return float(SCORE_ENGAGEMENT_VIRAL)
+            return {
+                "score": float(SCORE_ENGAGEMENT_VIRAL),
+                "rule": "twitter_engagement",
+                "tier": "viral",
+                "matched_on": {"likes": likes, "retweets": retweets, "replies": replies},
+            }
         if likes >= 500 or retweets >= 200 or replies >= 150:
-            return float(SCORE_ENGAGEMENT_HIGH)
+            return {
+                "score": float(SCORE_ENGAGEMENT_HIGH),
+                "rule": "twitter_engagement",
+                "tier": "high",
+                "matched_on": {"likes": likes, "retweets": retweets, "replies": replies},
+            }
         if likes >= 100 or retweets >= 50 or replies >= 60:
-            return float(SCORE_ENGAGEMENT_MED)
+            return {
+                "score": float(SCORE_ENGAGEMENT_MED),
+                "rule": "twitter_engagement",
+                "tier": "medium",
+                "matched_on": {"likes": likes, "retweets": retweets, "replies": replies},
+            }
         if likes >= 50 or retweets >= 20 or replies >= 20:
-            return float(SCORE_ENGAGEMENT_LOW)
-        return 0.0
+            return {
+                "score": float(SCORE_ENGAGEMENT_LOW),
+                "rule": "twitter_engagement",
+                "tier": "low",
+                "matched_on": {"likes": likes, "retweets": retweets, "replies": replies},
+            }
+        return {
+            "score": 0.0,
+            "rule": "twitter_engagement",
+            "tier": "none",
+            "matched_on": {"likes": likes, "retweets": retweets, "replies": replies},
+        }
 
     if source_type == "reddit":
         score = int(article.get("score", 0) or 0)
         comments = int(article.get("num_comments", 0) or 0)
         if score >= 1000 or comments >= 300:
-            return float(SCORE_DISCUSSION_VIRAL)
+            return {
+                "score": float(SCORE_DISCUSSION_VIRAL),
+                "rule": "reddit_discussion",
+                "tier": "viral",
+                "matched_on": {"score": score, "comments": comments},
+            }
         if score >= 500 or comments >= 150:
-            return float(SCORE_DISCUSSION_HIGH)
+            return {
+                "score": float(SCORE_DISCUSSION_HIGH),
+                "rule": "reddit_discussion",
+                "tier": "high",
+                "matched_on": {"score": score, "comments": comments},
+            }
         if score >= 200 or comments >= 80:
-            return float(SCORE_DISCUSSION_MED)
+            return {
+                "score": float(SCORE_DISCUSSION_MED),
+                "rule": "reddit_discussion",
+                "tier": "medium",
+                "matched_on": {"score": score, "comments": comments},
+            }
         if score >= 100 or comments >= 30:
-            return float(SCORE_DISCUSSION_LOW)
-        return 0.0
+            return {
+                "score": float(SCORE_DISCUSSION_LOW),
+                "rule": "reddit_discussion",
+                "tier": "low",
+                "matched_on": {"score": score, "comments": comments},
+            }
+        return {
+            "score": 0.0,
+            "rule": "reddit_discussion",
+            "tier": "none",
+            "matched_on": {"score": score, "comments": comments},
+        }
 
     if source_type == "v2ex":
-        return float(calculate_v2ex_replies_bonus(article.get("replies", 0)))
+        replies = article.get("replies", 0)
+        bonus = float(calculate_v2ex_replies_bonus(replies))
+        return {
+            "score": bonus,
+            "rule": "v2ex_replies",
+            "tier": "none" if bonus == 0 else "matched",
+            "matched_on": {"replies": replies},
+        }
 
-    return 0.0
+    return {"score": 0.0, "rule": "unsupported", "tier": "none", "matched_on": {}}
 
 
 def calculate_v2ex_replies_bonus(replies: Any) -> int:
@@ -352,23 +419,36 @@ def calculate_v2ex_replies_bonus(replies: Any) -> int:
 
 
 def calculate_recency_bonus(article: Dict[str, Any]) -> float:
+    return calculate_recency_bonus_details(article)["score"]
+
+
+def calculate_recency_bonus_details(article: Dict[str, Any]) -> Dict[str, Any]:
     article_date = parse_article_datetime(article.get("date"))
     if article_date is None:
-        return 0.0
+        return {"score": 0.0, "hours_old": None, "bucket": "missing_date"}
 
     hours_old = (datetime.now(timezone.utc) - article_date).total_seconds() / 3600
     if hours_old < 6:
-        return SCORING_CONFIG["recency_24h_bonus"] + SCORING_CONFIG["recency_6h_bonus"]
+        return {
+            "score": SCORING_CONFIG["recency_24h_bonus"] + SCORING_CONFIG["recency_6h_bonus"],
+            "hours_old": round(hours_old, 3),
+            "bucket": "under_6h",
+        }
     if hours_old < 24:
-        return SCORING_CONFIG["recency_24h_bonus"]
-    return 0.0
+        return {
+            "score": SCORING_CONFIG["recency_24h_bonus"],
+            "hours_old": round(hours_old, 3),
+            "bucket": "under_24h",
+        }
+    return {"score": 0.0, "hours_old": round(hours_old, 3), "bucket": "older"}
 
 
 def initialize_article_scores(articles: List[Dict[str, Any]]) -> None:
     for article in articles:
         source_type = article.get("source_type", "")
         base_priority_score = float(normalize_priority(article.get("source_priority", 3)))
-        local_extra_score = calculate_local_extra_score(article, source_type)
+        local_extra_details = calculate_local_extra_details(article, source_type)
+        local_extra_score = local_extra_details["score"]
         article["score_breakdown"] = {
             "base_priority_score": base_priority_score,
             "local_extra_score": local_extra_score,
@@ -382,6 +462,10 @@ def initialize_article_scores(articles: List[Dict[str, Any]]) -> None:
             "duplicate_cluster_id": None,
             "cluster_size": 1,
             "cross_source_match_count": 0,
+        }
+        article["score_debug"] = {
+            "_comment": SCORE_DEBUG_COMMENTS["score_debug"],
+            "final_score_formula": "base_priority_score + fetch_local_rank_score + history_penalty + cross_source_hot_bonus + recency_bonus",
         }
         article["quality_score"] = base_priority_score
         article["final_score"] = base_priority_score
@@ -406,9 +490,8 @@ def assign_fetch_rank_scores(articles: List[Dict[str, Any]]) -> None:
                 rank_pct = 1.0
             else:
                 rank_pct = 1.0 - ((rank - 1) / (total - 1))
-            article["score_breakdown"]["fetch_local_rank_score"] = round(
-                SCORING_CONFIG["fetch_rank_max"] * rank_pct, 3
-            )
+            rank_score = round(SCORING_CONFIG["fetch_rank_max"] * rank_pct, 3)
+            article["score_breakdown"]["fetch_local_rank_score"] = rank_score
         logging.debug("Assigned fetch-local rank scores for %s (%d items)", fetch_type, total)
 
 
@@ -441,6 +524,11 @@ def apply_history_penalties(articles: List[Dict[str, Any]], previous_titles: Ite
     for article in articles:
         similarity = best_history_similarity(article, previous_features)
         penalty = history_penalty_for_similarity(similarity)
+        matched_threshold = None
+        for threshold, candidate_penalty in SCORING_CONFIG["history_penalties"]:
+            if similarity >= threshold and candidate_penalty == penalty:
+                matched_threshold = threshold
+                break
         article["similarity_debug"]["best_history_similarity"] = round(similarity, 4)
         article["score_breakdown"]["history_penalty"] = penalty
         if penalty < 0:
@@ -551,7 +639,8 @@ def apply_cross_source_hot_bonus(articles: List[Dict[str, Any]], pair_similariti
 def recalculate_final_scores(articles: List[Dict[str, Any]]) -> None:
     for article in articles:
         breakdown = article["score_breakdown"]
-        breakdown["recency_bonus"] = calculate_recency_bonus(article)
+        recency_details = calculate_recency_bonus_details(article)
+        breakdown["recency_bonus"] = recency_details["score"]
         final_score = (
             breakdown["base_priority_score"]
             + breakdown["fetch_local_rank_score"]
@@ -561,6 +650,26 @@ def recalculate_final_scores(articles: List[Dict[str, Any]]) -> None:
         )
         article["final_score"] = round(final_score, 3)
         article["quality_score"] = article["final_score"]
+        article["score_debug"]["final_score"] = {
+            "_comment": SCORE_DEBUG_COMMENTS["final_score"],
+            "score": article["final_score"],
+            "components": {
+                "base_priority_score": breakdown["base_priority_score"],
+                "local_extra_score": breakdown["local_extra_score"],
+                "fetch_local_rank_score": breakdown["fetch_local_rank_score"],
+                "history_penalty": breakdown["history_penalty"],
+                "cross_source_hot_bonus": breakdown["cross_source_hot_bonus"],
+                "recency_bonus": breakdown["recency_bonus"],
+            },
+            "components_comment_zh": {
+                "base_priority_score": "基础分，来自 source_priority。",
+                "local_extra_score": "源内热度参考分，用于解释该条内容的站内热度信号。",
+                "fetch_local_rank_score": "同 source_type 内按排序位置得到的加分。",
+                "history_penalty": "与历史热点相似时的扣分。",
+                "cross_source_hot_bonus": "被多个不同 source_type 命中时的加分。",
+                "recency_bonus": "时效性加分。",
+            },
+        }
 
 
 def apply_similarity_scoring(articles: List[Dict[str, Any]], previous_titles: Iterable[str]) -> Dict[Tuple[int, int], float]:
@@ -736,7 +845,43 @@ def rerank_topic_articles(articles: List[Dict[str, Any]]) -> List[Dict[str, Any]
             return value, article.get("final_score", article.get("quality_score", 0))
 
         best = max(remaining, key=display_score)
+        best_source_type = best.get("source_type", "")
+        best_domain = get_domain(best.get("link", ""))
+        best_base_score = best.get("final_score", best.get("quality_score", 0))
+        best_display_score = (
+            best_base_score
+            - source_penalty * source_counts.get(best_source_type, 0)
+            - domain_penalty * domain_counts.get(best_domain, 0)
+        )
         remaining.remove(best)
+        best["topic_rerank_debug"] = {
+            "_comment": SCORE_DEBUG_COMMENTS["topic_rerank_debug"],
+            "slot": slot + 1,
+            "inputs": {
+                "final_score": {
+                    "value": round(best_base_score, 3),
+                    "from": "merge-sources final_score",
+                    "purpose": "作为 topic 内重排的基础分。",
+                },
+                "source_repeat_penalty": {
+                    "penalty_per_repeat": source_penalty,
+                    "repeat_count_before_pick": source_counts.get(best_source_type, 0),
+                    "from": "当前 topic 已入选内容里相同 source_type 的数量",
+                    "purpose": "减少同一来源类型连续霸榜，提升来源多样性。",
+                    "applied_penalty": round(source_penalty * source_counts.get(best_source_type, 0), 3),
+                },
+                "domain_repeat_penalty": {
+                    "penalty_per_repeat": domain_penalty,
+                    "repeat_count_before_pick": domain_counts.get(best_domain, 0),
+                    "from": "当前 topic 已入选内容里相同域名的数量",
+                    "purpose": "减少同一站点重复出现，提升站点多样性。",
+                    "applied_penalty": round(domain_penalty * domain_counts.get(best_domain, 0), 3),
+                },
+            },
+            "display_score": round(best_display_score, 3),
+            "formula": "final_score - source_repeat_penalty - domain_repeat_penalty",
+            "summary_zh": "topic 重排只在 final_score 基础上减去来源类型重复惩罚和域名重复惩罚，得到当前 slot 的 display_score。",
+        }
         selected.append(best)
         source_counts[best.get("source_type", "")] += 1
         domain = get_domain(best.get("link", ""))
@@ -990,6 +1135,12 @@ def build_merged_output(
             "previous_hotspots_penalty": len(previous_titles) > 0,
             "quality_scoring": True,
             "scoring_version": "2.0",
+            "scoring_comment_zh": "merge-sources 会先算每条内容的合并分，再在每个 topic 内做一次来源多样性重排。",
+            "score_formula": {
+                "merge_score": "base_priority_score + fetch_local_rank_score + history_penalty + cross_source_hot_bonus + recency_bonus",
+                "topic_rerank": "final_score - source_penalty * repeated_source_count - domain_penalty * repeated_domain_count",
+            },
+            "scoring_config": SCORING_CONFIG,
         },
         "output_stats": {
             "total_articles": total_after_domain_limits,

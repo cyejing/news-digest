@@ -73,7 +73,7 @@ For diagnostics:
 - `config/defaults/topics.json` — 10 topics with search queries and display settings
 - User overrides in `workspace/config/` take priority
 
-Default topic set includes `ai-models`, `ai-agents`, `ai-ecosystem`, `technology`, `developer-tools`, `github`, `markets-business`, `macro-policy`, `world-affairs`, and `cybersecurity`.
+Default topic set includes `ai-frontier`, `ai-infra`, `github`, `technology`, `business`, `world`, `science`, and `social`.
 
 RSS defaults are intentionally conservative: obvious personal blogs stay in `sources.rss` as candidate entries at the end of the list with `"enabled": false`.
 

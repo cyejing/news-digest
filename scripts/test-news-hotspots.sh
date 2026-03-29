@@ -10,7 +10,7 @@ DEFAULTS_DIR="$ROOT_DIR/config/defaults"
 DEFAULT_CONFIG_DIR="$ROOT_DIR/workspace/config"
 DEFAULT_ARCHIVE_ROOT_DIR="$ROOT_DIR/workspace/archive/news-hotspots"
 
-MERGED_JSON="$DEBUG_DIR/merged.json"
+MERGED_JSON="$DEBUG_DIR/merge-sources.json"
 RSS_JSON="$DEBUG_DIR/rss.json"
 GITHUB_JSON="$DEBUG_DIR/github.json"
 TRENDING_JSON="$DEBUG_DIR/trending.json"
@@ -79,7 +79,7 @@ OUTPUTS:
     /tmp/news-hotspots/debug/api.meta.json
     /tmp/news-hotspots/debug/v2ex.meta.json
     /tmp/news-hotspots/debug/reddit.meta.json
-    /tmp/news-hotspots/debug/merge.meta.json
+    /tmp/news-hotspots/debug/merge-sources.meta.json
     /tmp/news-hotspots/debug/merge-hotspots.meta.json
     /tmp/news-hotspots/debug/rss.json
     /tmp/news-hotspots/debug/twitter.json
@@ -89,7 +89,7 @@ OUTPUTS:
     /tmp/news-hotspots/debug/api.json
     /tmp/news-hotspots/debug/v2ex.json
     /tmp/news-hotspots/debug/reddit.json
-    /tmp/news-hotspots/debug/merged.json
+    /tmp/news-hotspots/debug/merge-sources.json
     /tmp/news-hotspots/debug/merge-hotspots.json
     workspace/archive/news-hotspots/<DATE>/json/daily.json
     workspace/archive/news-hotspots/<DATE>/markdown/daily.md
@@ -103,7 +103,7 @@ OUTPUTS:
     /tmp/news-hotspots/debug/reddit.json
     /tmp/news-hotspots/debug/v2ex.json
     /tmp/news-hotspots/debug/google.json
-    /tmp/news-hotspots/debug/merged.json
+    /tmp/news-hotspots/debug/merge-sources.json
     /tmp/news-hotspots/debug/merge-hotspots.json
     workspace/archive/news-hotspots/<DATE>/json/daily.json
     workspace/archive/news-hotspots/<DATE>/markdown/daily.md

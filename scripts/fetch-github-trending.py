@@ -175,19 +175,16 @@ def fetch_trending_repos(hours: int = 48, github_token: Optional[str] = None,
         - pushed_at: 最后推送时间
         - source_type: 数据源类型
     """
-    # 从配置文件加载查询
-    if defaults_dir:
-        trending_queries = load_github_trending_queries(defaults_dir, config_dir)
-    else:
-        # 回退到硬编码查询（向后兼容）
-        trending_queries = [
-            {"topic": "github", "q": "llm large-language-model in:topics,name,description"},
-            {"topic": "github", "q": "ai-agent autonomous-agent in:topics,name,description"},
-            {"topic": "github", "q": "machine-learning deep-learning in:topics,name,description"},
-            {"topic": "github", "q": "developer programming in:topics,name,description"},
-            {"topic": "github", "q": "finance trading in:topics,name,description"},
-            {"topic": "github", "q": "security cybersecurity in:topics,name,description"},
-        ]
+    effective_defaults_dir = defaults_dir or Path("config/defaults")
+    trending_queries = load_github_trending_queries(effective_defaults_dir, config_dir)
+    if not trending_queries:
+        logging.warning("No GitHub trending queries configured under topic=github")
+        return {
+            "repos": [],
+            "query_stats": [],
+            "queries_total": 0,
+            "queries_ok": 0,
+        }
     
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
     cutoff_str = cutoff.strftime("%Y-%m-%d")
@@ -299,7 +296,7 @@ Examples:
     parser.add_argument("--hours", type=int, default=48, help="Lookback window in hours (default: 48)")
     parser.add_argument("--min-stars", type=int, default=50, help="Minimum stars (default: 50)")
     parser.add_argument("--per-topic", type=int, default=15, help="Max repos per topic (default: 15)")
-    parser.add_argument("--defaults", type=Path, help="Default config directory")
+    parser.add_argument("--defaults", type=Path, default=Path("config/defaults"), help="Default config directory")
     parser.add_argument("--config", type=Path, help="User config directory")
     parser.add_argument("--output", "-o", type=Path, help="Output JSON path")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")

@@ -25,9 +25,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set
 
 try:
+    from config_loader import load_merged_topic_rules
     from topic_utils import resolve_primary_topic
 except ImportError:
     sys.path.append(str(Path(__file__).parent))
+    from config_loader import load_merged_topic_rules
     from topic_utils import resolve_primary_topic
 
 SOURCE_ID = "v2ex-api"
@@ -37,62 +39,6 @@ DEFAULT_TIMEOUT = 90
 COOLDOWN_SECONDS = float(os.environ.get("BB_BROWSER_V2EX_COOLDOWN_SECONDS", "5.0"))
 
 _last_success_at: Optional[float] = None
-
-NODE_TOPIC_MAP = {
-    "programmer": {"technology"},
-    "nodejs": {"technology"},
-    "python": {"technology"},
-    "java": {"technology"},
-    "go": {"technology"},
-    "rust": {"technology"},
-    "career": {"social"},
-    "devops": {"technology"},
-    "linux": {"technology"},
-    "database": {"technology"},
-    "server": {"technology"},
-    "ev": {"technology"},
-    "car": {"technology"},
-    "apple": {"technology"},
-    "android": {"technology"},
-    "iphone": {"technology"},
-    "ipad": {"technology"},
-    "macos": {"technology"},
-    "hardware": {"technology"},
-    "share": {"technology"},
-}
-
-TOPIC_KEYWORDS = {
-    "ai-frontier": [
-        "llm", "gpt", "claude", "gemini", "anthropic", "openai", "deepseek",
-        "qwen", "kimi", "大模型", "语言模型", "模型", "prompt",
-        "agent", "agents", "智能体", "copilot", "mcp", "automation", "agentic",
-    ],
-    "ai-infra": [
-        "ai chip", "gpu", "nvidia", "tesla", "spacex", "robotics", "humanoid",
-        "芯片", "算力", "存储", "机器人", "特斯拉", "自动驾驶",
-    ],
-    "technology": [
-        "robot", "机器人", "gpu", "芯片", "quantum", "量子", "space", "航天",
-        "自动驾驶", "智驾", "iphone", "ipad", "macbook", "mac", "ios",
-        "android", "tesla", "logitech", "罗技", "手机", "显卡", "耳机",
-        "汽车", "电车",
-        "python", "node", "nodejs", "nestjs", "fastify", "hono", "javascript",
-        "typescript", "backend", "frontend", "api", "docker", "k8s",
-        "编程", "程序员", "开发", "后端", "前端", "数据库", "运维",
-        "security", "cve", "漏洞", "隐私", "渗透", "攻击", "数据泄露",
-        "hacking", "breach",
-    ],
-    "business": [
-        "finance", "stock", "stocks", "market", "fund", "房贷", "股票", "基金",
-        "理财", "财务", "经济",
-        "inflation", "rate cut", "rate hike", "cpi", "央行", "利率", "宏观",
-        "监管", "政策", "财政",
-    ],
-    "world": [
-        "war", "conflict", "sanction", "diplomacy", "election", "government",
-        "国际", "外交", "冲突", "政治",
-    ],
-}
 
 
 def setup_logging(verbose: bool) -> logging.Logger:
@@ -153,18 +99,42 @@ def truncate_summary(value: str, limit: int = 240) -> str:
     return text[: limit - 3].rstrip() + "..."
 
 
-def infer_topic(title: str, content: str, node_slug: str, node_name: str) -> str:
-    haystack = f"{title}\n{content}\n{node_slug}\n{node_name}".lower()
-    topics: Set[str] = set(NODE_TOPIC_MAP.get(node_slug, set()))
+def get_v2ex_rules(defaults_dir: Optional[Path] = None, config_dir: Optional[Path] = None) -> Dict[str, Any]:
+    effective_defaults_dir = defaults_dir or Path("config/defaults")
+    rules = load_merged_topic_rules(effective_defaults_dir, config_dir)
+    v2ex_rules = (rules.get("source_rules", {}) or {}).get("v2ex", {})
+    if not isinstance(v2ex_rules, dict):
+        return {}
+    return {
+        "node_topic_map": v2ex_rules.get("node_topic_map", {}),
+        "keyword_map": v2ex_rules.get("keyword_map", {}),
+    }
 
-    for topic_id, keywords in TOPIC_KEYWORDS.items():
+
+def infer_topic(
+    title: str,
+    content: str,
+    node_slug: str,
+    node_name: str,
+    topic_rules: Optional[Dict[str, Any]] = None,
+    v2ex_rules: Optional[Dict[str, Any]] = None,
+) -> str:
+    haystack = f"{title}\n{content}\n{node_slug}\n{node_name}".lower()
+    effective_rules = v2ex_rules or get_v2ex_rules()
+    topics: Set[str] = set(effective_rules.get("node_topic_map", {}).get(node_slug, []))
+
+    for topic_id, keywords in effective_rules.get("keyword_map", {}).items():
         if any(keyword.lower() in haystack for keyword in keywords):
             topics.add(topic_id)
 
-    return resolve_primary_topic(list(topics))
+    return resolve_primary_topic(list(topics), rules=topic_rules)
 
 
-def transform_topic(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def transform_topic(
+    item: Dict[str, Any],
+    topic_rules: Optional[Dict[str, Any]] = None,
+    v2ex_rules: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
     title = clean_text(item.get("title", ""))
     link = item.get("url", "")
     if not title or not link:
@@ -173,7 +143,7 @@ def transform_topic(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     content = item.get("content", "") or ""
     node_slug = (item.get("nodeSlug") or "").strip().lower()
     node_name = clean_text(item.get("node", ""))
-    topic = infer_topic(title, content, node_slug, node_name)
+    topic = infer_topic(title, content, node_slug, node_name, topic_rules=topic_rules, v2ex_rules=v2ex_rules)
     if not topic:
         return None
 
@@ -200,14 +170,21 @@ def transform_topic(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     }
 
 
-def fetch_v2ex_hot(logger: logging.Logger) -> Dict[str, Any]:
+def fetch_v2ex_hot(
+    logger: logging.Logger,
+    defaults_dir: Optional[Path] = None,
+    config_dir: Optional[Path] = None,
+) -> Dict[str, Any]:
     logger.info("V2EX bb-browser cooldown: %.1fs", COOLDOWN_SECONDS)
     payload = run_bb_browser_site(["v2ex/hot"])
     raw_topics = payload.get("topics", [])
     articles: List[Dict[str, Any]] = []
+    effective_defaults_dir = defaults_dir or Path("config/defaults")
+    topic_rules = load_merged_topic_rules(effective_defaults_dir, config_dir)
+    v2ex_rules = get_v2ex_rules(defaults_dir, config_dir)
 
     for item in raw_topics:
-        article = transform_topic(item)
+        article = transform_topic(item, topic_rules=topic_rules, v2ex_rules=v2ex_rules)
         if article:
             articles.append(article)
 
@@ -222,7 +199,7 @@ def fetch_v2ex_hot(logger: logging.Logger) -> Dict[str, Any]:
         "source_type": "v2ex",
         "name": SOURCE_NAME,
         "priority": SOURCE_PRIORITY,
-        "topic": resolve_primary_topic([article.get("topic") for article in articles]),
+        "topic": resolve_primary_topic([article.get("topic") for article in articles], rules=topic_rules),
         "status": "ok" if articles else "error",
         "items": len(articles),
         "count": len(articles),
@@ -255,8 +232,8 @@ Examples:
     python3 fetch-v2ex.py --verbose
         """,
     )
-    parser.add_argument("--defaults", type=Path, default=Path("config/defaults"), help="Accepted for CLI consistency; not used by V2EX fetch")
-    parser.add_argument("--config", type=Path, help="Accepted for CLI consistency; not used by V2EX fetch")
+    parser.add_argument("--defaults", type=Path, default=Path("config/defaults"), help="Default configuration directory")
+    parser.add_argument("--config", type=Path, help="User configuration directory for overlays")
     parser.add_argument("--output", "-o", type=Path, help="Output JSON path")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
     parser.add_argument("--hours", type=int, default=48, help="Accepted for CLI consistency; not used by V2EX fetch")
@@ -274,7 +251,7 @@ def main() -> int:
         args.output = Path(temp_path)
 
     try:
-        data = fetch_v2ex_hot(logger)
+        data = fetch_v2ex_hot(logger, defaults_dir=args.defaults, config_dir=args.config)
         data["defaults_dir"] = str(args.defaults)
         data["config_dir"] = str(args.config) if args.config else None
         data["hours"] = args.hours

@@ -73,7 +73,7 @@ clawhub install news-hotspots
 - `config/defaults/topics.json` — 10 个主题，含搜索查询和展示配置
 - 用户配置放在 `workspace/config/`，优先级更高
 
-当前默认主题包括 `ai-models`、`ai-agents`、`ai-ecosystem`、`technology`、`developer-tools`、`github`、`markets-business`、`macro-policy`、`world-affairs`、`cybersecurity`。
+当前默认主题包括 `ai-frontier`、`ai-infra`、`github`、`technology`、`business`、`world`、`science`、`social`。
 
 RSS 默认源池现在更保守：明显的个人博客仍保留在 `sources.rss` 中，但会放到列表尾部并以 `"enabled": false` 作为候选源处理。
 

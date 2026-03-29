@@ -16,7 +16,7 @@ spec.loader.exec_module(fetch_api)
 
 class TestFetchApi(unittest.TestCase):
     def test_load_api_sources_includes_hacker_news(self):
-        sources = fetch_api.load_api_sources()
+        sources = fetch_api.load_api_sources(fetch_api.Path("config/defaults"))
         ids = [source["id"] for source in sources]
         self.assertIn("hacker-news-api", ids)
 
@@ -58,13 +58,26 @@ class TestFetchApi(unittest.TestCase):
 
         self.assertEqual(len(articles), 2)
         self.assertEqual(articles[0]["source_id"], "hacker-news-api")
-        self.assertEqual(articles[0]["topic"], "technology")
+        self.assertNotIn("topic", articles[0])
         self.assertEqual(articles[0]["score"], 123)
         self.assertEqual(articles[0]["comments"], 45)
         self.assertEqual(
             articles[1]["link"],
             "https://news.ycombinator.com/item?id=103",
         )
+
+    def test_fetch_source_applies_topic_from_config(self):
+        source = {
+            "id": "hacker-news-api",
+            "name": "Hacker News API",
+            "topic": "technology",
+            "priority": 4,
+        }
+        with patch.object(fetch_api, "fetch_hacker_news", return_value=[{"title": "A", "link": "https://example.com"}]):
+            result = fetch_api.fetch_source(source, limit=1, topic_rules={"topic_priority": ["technology"]})
+
+        self.assertEqual(result["topic"], "technology")
+        self.assertEqual(result["articles"][0]["topic"], "technology")
 
 
 if __name__ == "__main__":

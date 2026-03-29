@@ -137,6 +137,38 @@ class TestMergeHotspotsJson(unittest.TestCase):
             self.assertEqual(output, Path(tmpdir) / "merge-hotspots.json")
             self.assertTrue(Path(tmpdir).exists())
 
+    def test_build_hotspots_debug_includes_ranking_details(self):
+        data = {
+            "generated": "2026-03-28T12:00:00+00:00",
+            "output_stats": {"total_articles": 1},
+            "topics": {
+                "ai-frontier": {
+                    "articles": [
+                        {
+                            "title": "OpenAI ships a new model",
+                            "topic": "ai-frontier",
+                            "source_name": "OpenAI Blog",
+                            "source_type": "rss",
+                            "final_score": 12.34,
+                            "link": "https://example.com/openai",
+                            "score_breakdown": {"base_priority_score": 3, "fetch_local_rank_score": 3},
+                            "score_debug": {"final_score": {"score": 12.34}},
+                            "topic_rerank_debug": {"slot": 1, "display_score": 12.34},
+                        }
+                    ]
+                }
+            },
+        }
+
+        hotspots = hotspots_mod.build_hotspots(data, top_n=5)
+        debug_payload = hotspots_mod.build_hotspots_debug(data, hotspots, top_n=5)
+
+        item = debug_payload["topics"][0]["items"][0]
+        self.assertEqual(item["ranking_debug"]["final_score"], 12.34)
+        self.assertEqual(item["ranking_debug"]["display_score"], 12.3)
+        self.assertIn("final_score_components", item["ranking_debug"])
+        self.assertIn("topic_rerank_debug", item["ranking_debug"])
+
 
 class TestDebugDirectoryResolution(unittest.TestCase):
     def test_debug_dir_wins(self):

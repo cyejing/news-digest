@@ -80,7 +80,7 @@ class TestSourceHealth(unittest.TestCase):
 
     def test_compute_step_state_captures_merge_details(self):
         meta = {
-            "step_key": "merge",
+            "step_key": "merge-sources",
             "name": "Merge",
             "status": "ok",
             "elapsed_s": 3.2,
@@ -170,10 +170,10 @@ class TestSourceHealth(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            (tmp_path / "merge.meta.json").write_text(
+            (tmp_path / "merge-sources.meta.json").write_text(
                 json.dumps(
                     {
-                        "step_key": "merge",
+                        "step_key": "merge-sources",
                         "name": "Merge",
                         "status": "ok",
                         "elapsed_s": 2.4,

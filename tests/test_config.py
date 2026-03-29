@@ -17,6 +17,8 @@ spec.loader.exec_module(config_loader)
 
 load_merged_sources = config_loader.load_merged_sources
 load_merged_topics = config_loader.load_merged_topics
+load_merged_topic_rules = config_loader.load_merged_topic_rules
+load_merged_api_sources = config_loader.load_merged_api_sources
 
 DEFAULTS_DIR = Path(__file__).parent.parent / "config" / "defaults"
 
@@ -162,6 +164,61 @@ class TestLoadTopics(unittest.TestCase):
         self.assertTrue(github_sources)
         for source in github_sources:
             self.assertEqual(source.get("topic"), "github")
+
+
+class TestLoadTopicRules(unittest.TestCase):
+    def test_loads_defaults(self):
+        rules = load_merged_topic_rules(DEFAULTS_DIR)
+        self.assertIn("topic_priority", rules)
+        self.assertIn("legacy_topic_map", rules)
+
+    def test_v2ex_rules_are_available(self):
+        rules = load_merged_topic_rules(DEFAULTS_DIR)
+        v2ex_rules = rules.get("source_rules", {}).get("v2ex", {})
+        self.assertIn("node_topic_map", v2ex_rules)
+        self.assertIn("keyword_map", v2ex_rules)
+
+    def test_overlay_merges_topic_rules(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            overlay = {
+                "source_rules": {
+                    "v2ex": {
+                        "node_topic_map": {
+                            "life": ["social"]
+                        }
+                    }
+                }
+            }
+            overlay_path = Path(tmpdir) / "news-hotspots-topic-rules.json"
+            with open(overlay_path, "w", encoding="utf-8") as f:
+                json.dump(overlay, f)
+
+            rules = load_merged_topic_rules(DEFAULTS_DIR, Path(tmpdir))
+            self.assertEqual(rules["source_rules"]["v2ex"]["node_topic_map"]["life"], ["social"])
+            self.assertIn("programmer", rules["source_rules"]["v2ex"]["node_topic_map"])
+
+
+class TestLoadApiSources(unittest.TestCase):
+    def test_loads_default_api_sources(self):
+        sources = load_merged_api_sources(DEFAULTS_DIR)
+        ids = [source["id"] for source in sources]
+        self.assertIn("hacker-news-api", ids)
+        self.assertIn("weibo-api", ids)
+
+    def test_overlay_can_disable_api_source(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            overlay = {
+                "sources": [
+                    {"id": "weibo-api", "enabled": False}
+                ]
+            }
+            overlay_path = Path(tmpdir) / "news-hotspots-api-sources.json"
+            with open(overlay_path, "w", encoding="utf-8") as f:
+                json.dump(overlay, f)
+
+            sources = load_merged_api_sources(DEFAULTS_DIR, Path(tmpdir))
+            weibo = next(source for source in sources if source["id"] == "weibo-api")
+            self.assertFalse(weibo["enabled"])
 
 
 class TestSourceCounts(unittest.TestCase):

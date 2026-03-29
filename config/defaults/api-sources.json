@@ -1,0 +1,35 @@
+{
+  "_description": "Built-in API sources for non-RSS hot lists and public APIs.",
+  "_updated": "2026-03-30",
+  "_version": "1.0.0",
+  "sources": [
+    {
+      "id": "weibo-api",
+      "name": "Weibo Hot Search",
+      "enabled": true,
+      "topic": "world",
+      "priority": 3
+    },
+    {
+      "id": "wallstreetcn-api",
+      "name": "Wall Street CN",
+      "enabled": true,
+      "topic": "business",
+      "priority": 4
+    },
+    {
+      "id": "tencent-api",
+      "name": "Tencent News",
+      "enabled": true,
+      "topic": "world",
+      "priority": 3
+    },
+    {
+      "id": "hacker-news-api",
+      "name": "Hacker News API",
+      "enabled": true,
+      "topic": "technology",
+      "priority": 4
+    }
+  ]
+}

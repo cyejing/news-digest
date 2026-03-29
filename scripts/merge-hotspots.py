@@ -3,7 +3,7 @@
 Render merged pipeline output into compact hotspots JSON and Markdown.
 
 Usage:
-    python3 merge-hotspots.py --input <merged.json> --archive <archive-root> [--top <n>] [--topic <id>]
+    python3 merge-hotspots.py --input <merge-sources.json> --archive <archive-root> [--top <n>] [--topic <id>]
 """
 
 import argparse
@@ -42,10 +42,18 @@ def normalize_metrics(article: Dict[str, Any]) -> Dict[str, Any]:
 
 def hotspot_item(article: Dict[str, Any], rank: int) -> Dict[str, Any]:
     link = article.get("link") or article.get("reddit_url") or article.get("external_url", "")
+    title = (
+        article.get("title")
+        or article.get("name")
+        or article.get("repo")
+        or article.get("source_name")
+        or link
+        or ""
+    )
     return {
         "rank": rank,
         "topic": article.get("topic", ""),
-        "title": article.get("title", ""),
+        "title": title,
         "link": link,
         "score": round(article.get("final_score", article.get("quality_score", 0)), 1),
         "source_type": article.get("source_type", ""),
@@ -125,6 +133,73 @@ def build_hotspots(data: Dict[str, Any], top_n: int = 15, topic_filter: Optional
     }
 
 
+def build_hotspots_debug(
+    data: Dict[str, Any],
+    hotspots: Dict[str, Any],
+    top_n: int = 15,
+    topic_filter: Optional[str] = None,
+) -> Dict[str, Any]:
+    topics = data.get("topics", {})
+    debug_topics: List[Dict[str, Any]] = []
+
+    for topic_id, topic_data in topics.items():
+        if topic_filter and topic_id != topic_filter:
+            continue
+
+        sorted_articles = get_sorted_articles(topic_data)
+        limited_articles = sorted_articles[:top_n]
+        debug_items: List[Dict[str, Any]] = []
+        for rank, article in enumerate(limited_articles, start=1):
+            debug_items.append(
+                {
+                    "rank": rank,
+                    "title": article.get("title", ""),
+                    "link": article.get("link") or article.get("reddit_url") or article.get("external_url", ""),
+                    "score": round(article.get("final_score", article.get("quality_score", 0)), 1),
+                    "source_type": article.get("source_type", ""),
+                    "source_name": article.get("source_name", ""),
+                    "ranking_debug": {
+                        "_comment": "最终展示分数说明。这里只说明 final_score 由哪些项相加得到，以及各项的值。",
+                        "topic_rank": rank,
+                        "selected_for_output": True,
+                        "selected_reason_zh": f"该条内容在 topic 内按上游 final_score 排序后进入前 {top_n}。",
+                        "final_score_formula": "base_priority_score + fetch_local_rank_score + history_penalty + cross_source_hot_bonus + recency_bonus",
+                        "final_score_components": article.get("score_debug", {}).get("final_score", {}).get("components", article.get("score_breakdown", {})),
+                        "final_score": article.get("final_score", article.get("quality_score", 0)),
+                        "display_score": round(article.get("final_score", article.get("quality_score", 0)), 1),
+                        "display_score_comment_zh": "最终展示给用户的分数，等于 final_score 保留 1 位小数。",
+                        "topic_rerank_debug": article.get("topic_rerank_debug", {}),
+                    },
+                }
+            )
+
+        debug_topics.append(
+            {
+                "id": topic_id,
+                "title": humanize_topic_id(topic_id),
+                "available_articles": len(sorted_articles),
+                "selected_articles": len(limited_articles),
+                "omitted_articles": max(len(sorted_articles) - len(limited_articles), 0),
+                "items": debug_items,
+            }
+        )
+
+    return {
+        "generated_at": hotspots.get("generated_at"),
+        "total_articles": hotspots.get("total_articles", 0),
+        "_comment": "merge-hotspots 调试输出。用于解释热点阶段为什么选中这些条目，以及展示分数如何得到。",
+        "score_logic": {
+            "_comment": "热点阶段本身不重新发明一套评分，主要沿用 merge-sources 的 final_score，并转成展示分数。",
+            "hotspot_score": "round(upstream_final_score, 1)",
+            "hotspot_score_comment_zh": "展示分数 = 上游 final_score 保留 1 位小数。",
+            "topic_ordering": "use merge-sources topic order, then sort each topic by upstream final_score desc",
+            "topic_ordering_comment_zh": "topic 顺序沿用上游结果；topic 内按上游 final_score 倒序，再截断 top_n。",
+            "top_n_cutoff": top_n,
+        },
+        "topics": debug_topics,
+    }
+
+
 def resolve_debug_output(debug_dir: Optional[Path]) -> Optional[Path]:
     if not debug_dir:
         return None
@@ -184,7 +259,8 @@ def main() -> int:
     hotspots_json = build_hotspots(data, top_n=args.top, topic_filter=args.topic)
     debug_output = resolve_debug_output(args.debug)
     if debug_output:
-        debug_output.write_text(json.dumps(hotspots_json, ensure_ascii=False, indent=2), encoding="utf-8")
+        debug_payload = build_hotspots_debug(data, hotspots_json, top_n=args.top, topic_filter=args.topic)
+        debug_output.write_text(json.dumps(debug_payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     _, json_dir, markdown_dir = ensure_archive_dirs(args.archive)
     json_output, markdown_output = resolve_archive_pair(json_dir, markdown_dir, stem=args.mode)

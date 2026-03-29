@@ -2,7 +2,7 @@
 """
 Unified data collection pipeline for news-hotspots.
 
-Runs fetch steps, merges them into an internal JSON inside a debug directory,
+Runs fetch steps, merges them into an internal debug JSON inside a debug directory,
 then renders a compact hotspots JSON for downstream prompt-writing flows.
 """
 
@@ -534,6 +534,17 @@ def resolve_script_path(script: str) -> Path:
     return SCRIPTS_DIR / script
 
 
+def get_step_arg_value(args: List[str], flag: str) -> Optional[str]:
+    try:
+        index = args.index(flag)
+    except ValueError:
+        return None
+    next_index = index + 1
+    if next_index >= len(args):
+        return None
+    return args[next_index]
+
+
 def run_step_process(
     spec: StepSpec,
     *,
@@ -558,10 +569,17 @@ def run_step_process(
 
     t0 = time.time()
     try:
+        env = os.environ.copy()
+        defaults_dir = get_step_arg_value(spec.args, "--defaults")
+        config_dir = get_step_arg_value(spec.args, "--config")
+        if defaults_dir:
+            env["NEWS_HOTSPOTS_DEFAULTS_DIR"] = defaults_dir
+        if config_dir:
+            env["NEWS_HOTSPOTS_CONFIG_DIR"] = config_dir
         process = subprocess.Popen(
             cmd,
             text=True,
-            env=os.environ,
+            env=env,
             start_new_session=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -692,8 +710,8 @@ def build_fetch_steps(
             debug_dir / "trending.json",
             get_cooldown_for_script("fetch-github-trending.py"),
         ),
-        StepSpec("api", "API Sources", "fetch-api.py", verbose_flag, debug_dir / "api.json", None),
-        StepSpec("v2ex", "V2EX Hot", "fetch-v2ex.py", verbose_flag, debug_dir / "v2ex.json", get_cooldown_for_script("fetch-v2ex.py")),
+        StepSpec("api", "API Sources", "fetch-api.py", common + verbose_flag, debug_dir / "api.json", None),
+        StepSpec("v2ex", "V2EX Hot", "fetch-v2ex.py", common + verbose_flag, debug_dir / "v2ex.json", get_cooldown_for_script("fetch-v2ex.py")),
         StepSpec("reddit", "Reddit", "fetch-reddit.py", common + verbose_flag, debug_dir / "reddit.json", get_cooldown_for_script("fetch-reddit.py")),
     ]
 
@@ -802,7 +820,7 @@ def run_merge_step(
     *,
     respect_interrupt: bool = True,
 ) -> Tuple[StepSpec, Dict[str, Any], Path]:
-    spec = StepSpec("merge", "Merge", "merge-sources.py", build_merge_args(debug_dir, archive_dir, verbose), debug_dir / "merged.json", None)
+    spec = StepSpec("merge-sources", "Merge", "merge-sources.py", build_merge_args(debug_dir, archive_dir, verbose), debug_dir / "merge-sources.json", None)
     process_result = run_step_process(spec, timeout=MERGE_TIMEOUT, force=False, respect_interrupt=respect_interrupt)
     result, meta_path = finalize_step(debug_dir, spec, process_result)
     return spec, result, meta_path
@@ -821,11 +839,11 @@ def run_hotspots_step(
         "merge-hotspots",
         "Hotspots",
         "merge-hotspots.py",
-        ["--input", str(debug_dir / "merged.json"), "--archive", str(archive_dir), "--debug", str(debug_dir), "--top", str(hotspots_top), "--mode", str(mode)],
+        ["--input", str(debug_dir / "merge-sources.json"), "--archive", str(archive_dir), "--debug", str(debug_dir), "--top", str(hotspots_top), "--mode", str(mode)],
         debug_output,
         None,
     )
-    if not (debug_dir / "merged.json").exists():
+    if not (debug_dir / "merge-sources.json").exists():
         process_result = make_process_result(spec=spec, status="skipped", timeout=SUMMARY_TIMEOUT)
     else:
         process_result = run_step_process(spec, timeout=SUMMARY_TIMEOUT, force=False, output_flag=None, respect_interrupt=respect_interrupt)
@@ -1068,7 +1086,7 @@ def main() -> int:
                     logger=logger,
                 )
 
-        step_meta_paths["merge"] = str(merge_meta_path)
+        step_meta_paths["merge-sources"] = str(merge_meta_path)
         step_meta_paths["hotspots"] = str(hotspots_meta_path)
         hotspots_output = Path(hotspots_outputs["ARCHIVED_JSON"]) if hotspots_outputs.get("ARCHIVED_JSON") else None
         markdown_output = Path(hotspots_outputs["ARCHIVED_MARKDOWN"]) if hotspots_outputs.get("ARCHIVED_MARKDOWN") else None

@@ -24,13 +24,15 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 from urllib.parse import urlparse
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 
 try:
+    from config_loader import load_merged_api_sources, load_merged_topic_rules
     from topic_utils import get_source_topic
 except ImportError:
     import sys
     sys.path.append(str(Path(__file__).parent))
+    from config_loader import load_merged_api_sources, load_merged_topic_rules
     from topic_utils import get_source_topic
 
 try:
@@ -47,14 +49,6 @@ HOST_COOLDOWNS = {
 }
 _HOST_LAST_REQUEST_AT: Dict[str, float] = {}
 _HOST_COOLDOWN_LOCK = threading.Lock()
-
-DEFAULT_API_SOURCES = [
-    {"id": "weibo-api", "name": "Weibo Hot Search", "topic": "world", "priority": 3},
-    {"id": "wallstreetcn-api", "name": "Wall Street CN", "topic": "business", "priority": 4},
-    {"id": "tencent-api", "name": "Tencent News", "topic": "world", "priority": 3},
-    {"id": "hacker-news-api", "name": "Hacker News API", "topic": "technology", "priority": 4},
-]
-
 
 class RedirectHandler308(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
@@ -148,7 +142,6 @@ def fetch_weibo(limit: int = 15) -> List[Dict[str, Any]]:
                 "source_id": "weibo-api",
                 "source_type": "api",
                 "source_name": "Weibo Hot Search",
-                "topic": "world",
                 "heat": str(heat),
             })
     except Exception as e:
@@ -177,7 +170,6 @@ def fetch_wallstreetcn(limit: int = 15) -> List[Dict[str, Any]]:
                     "source_id": "wallstreetcn-api",
                     "source_type": "api",
                     "source_name": "Wall Street CN",
-                    "topic": "business",
                 })
     except Exception as e:
         logging.debug(f"WallStreetCN fetch failed: {e}")
@@ -201,7 +193,6 @@ def fetch_tencent(limit: int = 15) -> List[Dict[str, Any]]:
                 "source_id": "tencent-api",
                 "source_type": "api",
                 "source_name": "Tencent News",
-                "topic": "world",
             })
     except Exception as e:
         logging.debug(f"Tencent News fetch failed: {e}")
@@ -244,7 +235,6 @@ def fetch_hacker_news(limit: int = 15) -> List[Dict[str, Any]]:
                 "source_id": "hacker-news-api",
                 "source_type": "api",
                 "source_name": "Hacker News API",
-                "topic": "technology",
                 "hn_id": story_id,
                 "score": int(item.get("score", 0) or 0),
                 "comments": int(item.get("descendants", 0) or 0),
@@ -266,18 +256,19 @@ API_SOURCE_FETCHERS = {
 }
 
 
-def load_api_sources() -> List[Dict[str, Any]]:
-    """Return the built-in API source list."""
-    api_sources = [source.copy() for source in DEFAULT_API_SOURCES]
+def load_api_sources(defaults_dir: Optional[Path] = None, config_dir: Optional[Path] = None) -> List[Dict[str, Any]]:
+    """Return configured API source list."""
+    effective_defaults_dir = defaults_dir or Path("config/defaults")
+    api_sources = [source.copy() for source in load_merged_api_sources(effective_defaults_dir, config_dir)]
     logging.info(f"Loaded {len(api_sources)} API sources")
     return api_sources
 
 
-def fetch_source(source: Dict[str, Any], limit: int = 15) -> Dict[str, Any]:
+def fetch_source(source: Dict[str, Any], limit: int = 15, topic_rules: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Fetch a single API source."""
     source_id = source["id"]
     name = source.get("name", source_id)
-    topic = get_source_topic(source)
+    topic = get_source_topic(source, rules=topic_rules)
     priority = normalize_priority(source.get("priority"))
     
     fetcher = API_SOURCE_FETCHERS.get(source_id)
@@ -331,6 +322,8 @@ def parse_args() -> argparse.Namespace:
         description="Fetch news from API sources.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    parser.add_argument("--defaults", type=Path, default=Path("config/defaults"), help="Default configuration directory")
+    parser.add_argument("--config", type=Path, help="User configuration directory for overlays")
     parser.add_argument("--limit", type=int, default=15, help="Max items per source (default: 15)")
     parser.add_argument("--output", "-o", type=Path, help="Output JSON path")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
@@ -350,13 +343,17 @@ def main() -> int:
         args.output = Path(temp_path)
 
     try:
-        sources = load_api_sources()
+        topic_rules = load_merged_topic_rules(args.defaults, args.config)
+        sources = [
+            source for source in load_api_sources(args.defaults, args.config)
+            if source.get("enabled", True)
+        ]
 
         logger.info(f"Fetching {len(sources)} API sources")
         
         results = []
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-            futures = {pool.submit(fetch_source, source, args.limit): source for source in sources}
+            futures = {pool.submit(fetch_source, source, args.limit, topic_rules): source for source in sources}
             
             for future in as_completed(futures):
                 result = future.result()
@@ -375,6 +372,8 @@ def main() -> int:
         output = {
             "generated": datetime.now(timezone.utc).isoformat(),
             "source_type": "api",
+            "defaults_dir": str(args.defaults),
+            "config_dir": str(args.config) if args.config else None,
             "calls_total": len(results),
             "calls_ok": ok_count,
             "calls_kind": "sources",

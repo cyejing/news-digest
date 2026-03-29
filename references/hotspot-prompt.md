@@ -94,13 +94,13 @@ uv run <SKILL_DIR>/scripts/source-health.py \
 ```bash
 uv run <SKILL_DIR>/scripts/merge-sources.py \
   --archive <WORKSPACE>/archive/news-hotspots \
-  --output <WORKSPACE>/.../debug/merged.json \
+  --output <WORKSPACE>/.../debug/merge-sources.json \
   [仅传入当前已经存在的 fetch 输出文件]
 ```
 
 ```bash
 uv run <SKILL_DIR>/scripts/merge-hotspots.py \
-  --input <WORKSPACE>/.../debug/merged.json \
+  --input <WORKSPACE>/.../debug/merge-sources.json \
   --archive <WORKSPACE>/archive/news-hotspots \
   --debug <WORKSPACE>/.../debug \
   --mode <MODE>

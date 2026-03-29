@@ -201,7 +201,7 @@ class TestGroupByTopics(unittest.TestCase):
         ]
         groups = group_by_topics(articles)
         
-        # Should have only 2 articles total (1 in ai-models, 1 in ai-ecosystem)
+        # Should have only 2 articles total (1 in ai-frontier, 1 in ai-infra)
         total = sum(len(articles) for articles in groups.values())
         self.assertEqual(total, 2)
         
@@ -218,6 +218,9 @@ class TestGroupByTopics(unittest.TestCase):
         ordered = groups["ai-frontier"]
         self.assertEqual(ordered[0]["source_type"], "twitter")
         self.assertEqual(ordered[1]["source_type"], "rss")
+        self.assertEqual(ordered[0]["topic_rerank_debug"]["slot"], 1)
+        self.assertEqual(ordered[1]["topic_rerank_debug"]["slot"], 2)
+        self.assertIn("display_score", ordered[1]["topic_rerank_debug"])
 
 
 class TestFixtureData(unittest.TestCase):

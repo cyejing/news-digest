@@ -51,6 +51,29 @@ class TestFetchV2EX(unittest.TestCase):
 
         self.assertIsNone(article)
 
+    def test_transform_topic_uses_configured_v2ex_rules(self):
+        article = fetch_v2ex.transform_topic(
+            {
+                "id": 3,
+                "title": "今天聊聊生活与工作平衡",
+                "content": "",
+                "node": "生活",
+                "nodeSlug": "life",
+                "author": "carol",
+                "replies": 30,
+                "created": 1774594066,
+                "url": "https://www.v2ex.com/t/3",
+            },
+            topic_rules={"topic_priority": ["social", "technology"]},
+            v2ex_rules={
+                "node_topic_map": {"life": ["social"]},
+                "keyword_map": {},
+            },
+        )
+
+        self.assertIsNotNone(article)
+        self.assertEqual(article["topic"], "social")
+
     def test_run_bb_browser_site_parses_json_and_updates_cooldown(self):
         completed = MagicMock(returncode=0, stdout='{"topics": []}', stderr="")
         with patch.object(fetch_v2ex.subprocess, "run", return_value=completed) as run_mock:
