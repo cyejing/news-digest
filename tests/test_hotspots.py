@@ -29,10 +29,11 @@ class TestMergeHotspotsJson(unittest.TestCase):
             "generated": "2026-03-28T12:00:00+00:00",
             "output_stats": {"total_articles": 2},
             "topics": {
-                "ai-models": {
+                "ai-frontier": {
                     "articles": [
                         {
                             "title": "OpenAI ships a new model",
+                            "topic": "ai-frontier",
                             "source_name": "OpenAI Blog",
                             "source_type": "rss",
                             "final_score": 12.3,
@@ -47,8 +48,8 @@ class TestMergeHotspotsJson(unittest.TestCase):
         }
         output = hotspots_mod.build_hotspots(data, top_n=5)
         self.assertEqual(output["total_articles"], 2)
-        self.assertEqual(output["topic_order"], ["ai-models"])
-        self.assertEqual(output["topics"][0]["title"], "Ai Models")
+        self.assertEqual(output["topic_order"], ["ai-frontier"])
+        self.assertEqual(output["topics"][0]["title"], "Ai Frontier")
         self.assertEqual(output["topics"][0]["items"][0]["score"], 12.3)
         self.assertEqual(output["topics"][0]["items"][0]["metrics"]["likes"], 999)
         self.assertNotIn("score_breakdown", output["topics"][0]["items"][0])
@@ -57,10 +58,11 @@ class TestMergeHotspotsJson(unittest.TestCase):
         data = {
             "output_stats": {"total_articles": 1},
             "topics": {
-                "ai-models": {
+                "ai-frontier": {
                     "articles": [
                         {
                             "title": "OpenAI ships a new model",
+                            "topic": "ai-frontier",
                             "source_name": "OpenAI Blog",
                             "source_type": "rss",
                             "final_score": 12.3,
@@ -85,7 +87,7 @@ class TestMergeHotspotsJson(unittest.TestCase):
             "generated_at": "2026-03-28T12:00:00+00:00",
             "topics": [
                 {
-                    "title": "Ai Models",
+                    "title": "Ai Frontier",
                     "items": [
                         {
                             "rank": 1,
@@ -112,7 +114,7 @@ class TestMergeHotspotsJson(unittest.TestCase):
         self.assertIn("1. ⭐12.3 | [OpenAI ships a new model](https://example.com/openai)  ", markdown)
         self.assertIn("   来源：OpenAI Blog | 指标：likes=999, score=123", markdown)
         self.assertIn("   来源：The Verge", markdown)
-        self.assertIn("## Ai Models\n1. ⭐12.3", markdown)
+        self.assertIn("## Ai Frontier\n1. ⭐12.3", markdown)
 
     def test_archive_pair_uses_matching_suffixes(self):
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -3,7 +3,7 @@
 Fetch RSS feeds from unified sources configuration.
 
 Reads sources.json, filters RSS sources, fetches feeds in parallel with retry
-mechanism, and outputs structured JSON with articles tagged by topics.
+mechanism, and outputs structured JSON with articles tagged by a single topic.
 
 Usage:
     python3 fetch-rss.py [--config CONFIG_DIR] [--hours 48] [--output FILE] [--verbose]
@@ -28,6 +28,12 @@ from typing import Dict, List, Any, Optional
 import threading
 from xml.etree import ElementTree as ET
 from email.utils import parsedate_to_datetime
+
+try:
+    from topic_utils import get_source_topic
+except ImportError:
+    sys.path.append(str(Path(__file__).parent))
+    from topic_utils import get_source_topic
 
 
 def normalize_priority(priority: Any, default: int = 3) -> int:
@@ -392,7 +398,7 @@ def fetch_feed_with_retry(source: Dict[str, Any], cutoff: datetime, no_cache: bo
     name = source["name"]
     url = source["url"]
     priority = normalize_priority(source.get("priority"))
-    topics = source["topics"]
+    topic = get_source_topic(source)
     
     global _rss_cache, _rss_cache_dirty
     
@@ -437,7 +443,7 @@ def fetch_feed_with_retry(source: Dict[str, Any], cutoff: datetime, no_cache: bo
                         "name": name,
                         "url": url,
                         "priority": priority,
-                        "topics": topics,
+                        "topic": topic,
                         "status": "ok",
                         "attempts": attempt + 1,
                         "not_modified": True,
@@ -448,10 +454,10 @@ def fetch_feed_with_retry(source: Dict[str, Any], cutoff: datetime, no_cache: bo
                 
             articles = parse_feed(content, cutoff, final_url)
             
-            # Tag articles with topics and validate domains
+            # Tag articles with the source topic and validate domains
             validated_articles = []
             for article in articles:
-                article["topics"] = topics[:]
+                article["topic"] = topic
                 if validate_article_domain(article.get("link", ""), source):
                     validated_articles.append(article)
                 else:
@@ -464,7 +470,7 @@ def fetch_feed_with_retry(source: Dict[str, Any], cutoff: datetime, no_cache: bo
                 "name": name,
                 "url": url,
                 "priority": priority,
-                "topics": topics,
+                "topic": topic,
                         "status": "ok",
                         "attempts": attempt + 1,
                         "items": len(articles),
@@ -486,7 +492,7 @@ def fetch_feed_with_retry(source: Dict[str, Any], cutoff: datetime, no_cache: bo
                     "name": name,
                     "url": url,
                     "priority": priority,
-                    "topics": topics,
+                    "topic": topic,
                     "status": "error",
                     "attempts": attempt + 1,
                     "error": error_msg,

@@ -27,7 +27,7 @@ class TestFetchGoogle(unittest.TestCase):
 
     def test_fetch_topic_aggregates_queries(self):
         topic = {
-            "id": "ai-models",
+            "id": "ai-frontier",
             "search": {
                 "queries": ["OpenAI", "Anthropic"],
                 "exclude": ["tutorial"],

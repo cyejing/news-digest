@@ -96,27 +96,27 @@ class TestURLDedup(unittest.TestCase):
 class TestDeduplication(unittest.TestCase):
     def test_removes_url_duplicates(self):
         articles = [
-            {"title": "Article A", "link": "https://example.com/a?ref=rss", "topics": ["ai-models"]},
-            {"title": "Article A from RSS", "link": "https://example.com/a?ref=twitter", "topics": ["ai-models"]},
-            {"title": "Article B", "link": "https://example.com/b", "topics": ["ai-models"]},
+            {"title": "Article A", "link": "https://example.com/a?ref=rss", "topic": "ai-frontier"},
+            {"title": "Article A from RSS", "link": "https://example.com/a?ref=twitter", "topic": "ai-frontier"},
+            {"title": "Article B", "link": "https://example.com/b", "topic": "ai-frontier"},
         ]
         result = deduplicate_articles(articles)
         self.assertEqual(len(result), 2)
 
     def test_removes_title_duplicates(self):
         articles = [
-            {"title": "OpenAI releases GPT-5", "link": "https://a.com/1", "topics": ["ai-models"]},
-            {"title": "OpenAI releases GPT-5!", "link": "https://b.com/2", "topics": ["ai-models"]},
-            {"title": "Completely different article", "link": "https://c.com/3", "topics": ["ai-models"]},
+            {"title": "OpenAI releases GPT-5", "link": "https://a.com/1", "topic": "ai-frontier"},
+            {"title": "OpenAI releases GPT-5!", "link": "https://b.com/2", "topic": "ai-frontier"},
+            {"title": "Completely different article", "link": "https://c.com/3", "topic": "ai-frontier"},
         ]
         result = deduplicate_articles(articles)
         self.assertEqual(len(result), 2)
 
     def test_keeps_different_articles(self):
         articles = [
-            {"title": "Python 3.12 released", "link": "https://a.com/1", "topics": ["ai-models"]},
-            {"title": "Rust 1.75 announced", "link": "https://b.com/2", "topics": ["ai-models"]},
-            {"title": "Go 1.22 is out", "link": "https://c.com/3", "topics": ["ai-models"]},
+            {"title": "Python 3.12 released", "link": "https://a.com/1", "topic": "ai-frontier"},
+            {"title": "Rust 1.75 announced", "link": "https://b.com/2", "topic": "ai-frontier"},
+            {"title": "Go 1.22 is out", "link": "https://c.com/3", "topic": "ai-frontier"},
         ]
         result = deduplicate_articles(articles)
         self.assertEqual(len(result), 3)
@@ -126,14 +126,14 @@ class TestDeduplication(unittest.TestCase):
             {
                 "title": "OpenAI releases GPT-5",
                 "link": "https://a.com/1",
-                "topics": ["ai-models"],
+                "topic": "ai-frontier",
                 "source_type": "rss",
                 "source_priority": 3,
             },
             {
                 "title": "OpenAI releases GPT-5 model",
                 "link": "https://b.com/2",
-                "topics": ["ai-models"],
+                "topic": "ai-frontier",
                 "source_type": "twitter",
                 "source_priority": 5,
                 "metrics": {"like_count": 2000, "retweet_count": 800},
@@ -176,36 +176,28 @@ class TestGroupByTopics(unittest.TestCase):
     def test_groups_correctly(self):
         """Test that articles are assigned to their highest-priority topic only."""
         articles = [
-            {"title": "A", "topics": ["ai-models", "ai-agents"]},
-            {"title": "B", "topics": ["ai-ecosystem"]},
-            {"title": "C", "topics": ["ai-models"]},
+            {"title": "A", "topic": "ai-frontier"},
+            {"title": "B", "topic": "ai-infra"},
+            {"title": "C", "topic": "ai-frontier"},
         ]
         groups = group_by_topics(articles)
-        
-        # Article A should ONLY be in 'ai-models' (higher priority), not 'ai-agents'
-        # This is the fix: each article appears in only ONE topic
-        self.assertEqual(len(groups["ai-models"]), 2)  # Articles A and C
-        self.assertEqual(len(groups["ai-ecosystem"]), 1)  # Article B
-        
-        # Article A should have primary_topic='ai-models' and all_topics preserved
-        article_a = next(a for a in groups["ai-models"] if a["title"] == "A")
-        self.assertEqual(article_a["primary_topic"], "ai-models")
-        self.assertEqual(article_a["all_topics"], ["ai-models", "ai-agents"])
-        
-        # ai-agents topic should NOT exist since all its articles went to ai-models
-        self.assertNotIn("ai-agents", groups)
+
+        self.assertEqual(len(groups["ai-frontier"]), 2)
+        self.assertEqual(len(groups["ai-infra"]), 1)
+        article_a = next(a for a in groups["ai-frontier"] if a["title"] == "A")
+        self.assertEqual(article_a["topic"], "ai-frontier")
 
     def test_no_topics_goes_uncategorized(self):
-        articles = [{"title": "A", "topics": []}, {"title": "B"}]
+        articles = [{"title": "A", "topic": ""}, {"title": "B"}]
         groups = group_by_topics(articles)
         self.assertIn("uncategorized", groups)
         
     def test_cross_topic_deduplication(self):
         """Test that duplicate titles across topics are removed."""
         articles = [
-            {"title": "Same Article", "topics": ["ai-models", "ai-agents"], "quality_score": 10},
-            {"title": "Same Article", "topics": ["ai-agents"], "quality_score": 8},
-            {"title": "Different Article", "topics": ["ai-ecosystem"], "quality_score": 5},
+            {"title": "Same Article", "topic": "ai-frontier", "quality_score": 10},
+            {"title": "Same Article", "topic": "ai-frontier", "quality_score": 8},
+            {"title": "Different Article", "topic": "ai-infra", "quality_score": 5},
         ]
         groups = group_by_topics(articles)
         
@@ -213,18 +205,17 @@ class TestGroupByTopics(unittest.TestCase):
         total = sum(len(articles) for articles in groups.values())
         self.assertEqual(total, 2)
         
-        # "Same Article" should be in ai-models with score 10
-        self.assertEqual(len(groups["ai-models"]), 1)
-        self.assertEqual(groups["ai-models"][0]["quality_score"], 10)
+        self.assertEqual(len(groups["ai-frontier"]), 1)
+        self.assertEqual(groups["ai-frontier"][0]["quality_score"], 10)
 
     def test_topic_diversity_rerank_prefers_different_sources_early(self):
         articles = [
-            {"title": "A1", "topics": ["ai-models"], "source_type": "twitter", "final_score": 10, "quality_score": 10, "link": "https://x.com/1"},
-            {"title": "A2", "topics": ["ai-models"], "source_type": "twitter", "final_score": 9, "quality_score": 9, "link": "https://x.com/2"},
-            {"title": "B1", "topics": ["ai-models"], "source_type": "rss", "final_score": 8.8, "quality_score": 8.8, "link": "https://example.com/1"},
+            {"title": "A1", "topic": "ai-frontier", "source_type": "twitter", "final_score": 10, "quality_score": 10, "link": "https://x.com/1"},
+            {"title": "A2", "topic": "ai-frontier", "source_type": "twitter", "final_score": 9, "quality_score": 9, "link": "https://x.com/2"},
+            {"title": "B1", "topic": "ai-frontier", "source_type": "rss", "final_score": 8.8, "quality_score": 8.8, "link": "https://example.com/1"},
         ]
         groups = group_by_topics(articles)
-        ordered = groups["ai-models"]
+        ordered = groups["ai-frontier"]
         self.assertEqual(ordered[0]["source_type"], "twitter")
         self.assertEqual(ordered[1]["source_type"], "rss")
 
@@ -256,7 +247,7 @@ class TestHistoryPenalty(unittest.TestCase):
             {
                 "title": "OpenAI releases GPT-5 model",
                 "link": "https://example.com/openai-gpt5",
-                "topics": ["ai-models"],
+                "topic": "ai-frontier",
                 "source_type": "rss",
                 "source_priority": 3,
             }
@@ -345,14 +336,14 @@ class TestIntegration(unittest.TestCase):
             for source in data.get(key, []):
                 for a in source.get(sub_key, []):
                     a["source_type"] = name
-                    a.setdefault("topics", [])
+                    a.setdefault("topic", "")
                     all_articles.append(a)
         # Google has topics[].articles[]
         google = load_fixture("google")
         for topic in google.get("topics", []):
             for a in topic.get("articles", []):
                 a["source_type"] = "google"
-                a.setdefault("topics", [])
+                a.setdefault("topic", topic.get("topic_id", ""))
                 all_articles.append(a)
         return all_articles
 

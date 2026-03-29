@@ -43,7 +43,7 @@ class TestFetchGitHub(unittest.TestCase):
 
         self.assertTrue(sources)
         self.assertTrue(all(source["type"] == "github" for source in sources))
-        self.assertTrue(all(source.get("topics") == ["github"] for source in sources))
+        self.assertTrue(all(source.get("topic") == "github" for source in sources))
 
     def test_fetch_releases_preserves_single_github_topic(self):
         source = {
@@ -51,7 +51,7 @@ class TestFetchGitHub(unittest.TestCase):
             "name": "Ollama",
             "repo": "ollama/ollama",
             "priority": 8,
-            "topics": ["github"],
+            "topic": "github",
         }
         cutoff = datetime(2026, 3, 27, 0, 0, tzinfo=timezone.utc)
         payload = [
@@ -73,9 +73,9 @@ class TestFetchGitHub(unittest.TestCase):
             )
 
         self.assertEqual(result["status"], "ok")
-        self.assertEqual(result["topics"], ["github"])
+        self.assertEqual(result["topic"], "github")
         self.assertEqual(result["count"], 1)
-        self.assertEqual(result["articles"][0]["topics"], ["github"])
+        self.assertEqual(result["articles"][0]["topic"], "github")
         self.assertEqual(result["articles"][0]["title"], "ollama v0.18.0")
 
 

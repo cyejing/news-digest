@@ -27,6 +27,13 @@ from pathlib import Path
 from typing import Dict, List, Any
 
 try:
+    from topic_utils import get_source_topic
+except ImportError:
+    import sys
+    sys.path.append(str(Path(__file__).parent))
+    from topic_utils import get_source_topic
+
+try:
     import requests
     HAS_REQUESTS = True
 except ImportError:
@@ -42,10 +49,10 @@ _HOST_LAST_REQUEST_AT: Dict[str, float] = {}
 _HOST_COOLDOWN_LOCK = threading.Lock()
 
 DEFAULT_API_SOURCES = [
-    {"id": "weibo-api", "name": "Weibo Hot Search", "topics": ["world-affairs"], "priority": 3},
-    {"id": "wallstreetcn-api", "name": "Wall Street CN", "topics": ["markets-business"], "priority": 4},
-    {"id": "tencent-api", "name": "Tencent News", "topics": ["world-affairs"], "priority": 3},
-    {"id": "hacker-news-api", "name": "Hacker News API", "topics": ["technology", "developer-tools"], "priority": 4},
+    {"id": "weibo-api", "name": "Weibo Hot Search", "topic": "world", "priority": 3},
+    {"id": "wallstreetcn-api", "name": "Wall Street CN", "topic": "business", "priority": 4},
+    {"id": "tencent-api", "name": "Tencent News", "topic": "world", "priority": 3},
+    {"id": "hacker-news-api", "name": "Hacker News API", "topic": "technology", "priority": 4},
 ]
 
 
@@ -141,7 +148,7 @@ def fetch_weibo(limit: int = 15) -> List[Dict[str, Any]]:
                 "source_id": "weibo-api",
                 "source_type": "api",
                 "source_name": "Weibo Hot Search",
-                "topics": ["world-affairs"],
+                "topic": "world",
                 "heat": str(heat),
             })
     except Exception as e:
@@ -170,7 +177,7 @@ def fetch_wallstreetcn(limit: int = 15) -> List[Dict[str, Any]]:
                     "source_id": "wallstreetcn-api",
                     "source_type": "api",
                     "source_name": "Wall Street CN",
-                    "topics": ["markets-business"],
+                    "topic": "business",
                 })
     except Exception as e:
         logging.debug(f"WallStreetCN fetch failed: {e}")
@@ -194,7 +201,7 @@ def fetch_tencent(limit: int = 15) -> List[Dict[str, Any]]:
                 "source_id": "tencent-api",
                 "source_type": "api",
                 "source_name": "Tencent News",
-                "topics": ["world-affairs"],
+                "topic": "world",
             })
     except Exception as e:
         logging.debug(f"Tencent News fetch failed: {e}")
@@ -237,7 +244,7 @@ def fetch_hacker_news(limit: int = 15) -> List[Dict[str, Any]]:
                 "source_id": "hacker-news-api",
                 "source_type": "api",
                 "source_name": "Hacker News API",
-                "topics": ["technology", "developer-tools"],
+                "topic": "technology",
                 "hn_id": story_id,
                 "score": int(item.get("score", 0) or 0),
                 "comments": int(item.get("descendants", 0) or 0),
@@ -270,7 +277,7 @@ def fetch_source(source: Dict[str, Any], limit: int = 15) -> Dict[str, Any]:
     """Fetch a single API source."""
     source_id = source["id"]
     name = source.get("name", source_id)
-    topics = source.get("topics", [])
+    topic = get_source_topic(source)
     priority = normalize_priority(source.get("priority"))
     
     fetcher = API_SOURCE_FETCHERS.get(source_id)
@@ -280,7 +287,7 @@ def fetch_source(source: Dict[str, Any], limit: int = 15) -> Dict[str, Any]:
             "source_type": "api",
             "name": name,
             "priority": priority,
-            "topics": topics,
+            "topic": topic,
             "status": "error",
             "error": f"Unknown source: {source_id}",
             "items": 0,
@@ -292,14 +299,14 @@ def fetch_source(source: Dict[str, Any], limit: int = 15) -> Dict[str, Any]:
         articles = fetcher(limit)
         
         for article in articles:
-            article["topics"] = topics[:]
+            article["topic"] = topic
         
         return {
             "source_id": source_id,
             "source_type": "api",
             "name": name,
             "priority": priority,
-            "topics": topics,
+            "topic": topic,
             "status": "ok",
             "items": len(articles),
             "count": len(articles),
@@ -311,7 +318,7 @@ def fetch_source(source: Dict[str, Any], limit: int = 15) -> Dict[str, Any]:
             "source_type": "api",
             "name": name,
             "priority": priority,
-            "topics": topics,
+            "topic": topic,
             "status": "error",
             "error": str(e)[:100],
             "items": 0,

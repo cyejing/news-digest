@@ -27,6 +27,12 @@ except ImportError:
     sys.path.append(str(Path(__file__).parent))
     from config_loader import load_merged_sources
 
+try:
+    from topic_utils import get_source_topic
+except ImportError:
+    sys.path.append(str(Path(__file__).parent))
+    from topic_utils import get_source_topic
+
 COOLDOWN_SECONDS = float(os.environ.get("BB_BROWSER_REDDIT_COOLDOWN_SECONDS", "6.0"))
 DEFAULT_TIMEOUT = 180
 _last_success_at: Optional[float] = None
@@ -166,7 +172,7 @@ def parse_post(item: Dict[str, Any], source: Dict[str, Any]) -> Optional[Dict[st
         "flair": flair,
         "is_self": is_self,
         "summary": summary[:400],
-        "topics": source.get("topics", [])[:],
+        "topic": get_source_topic(source),
         "metrics": {
             "score": score,
             "num_comments": num_comments,
@@ -226,7 +232,7 @@ def fetch_source(source: Dict[str, Any], hours: int) -> Dict[str, Any]:
             "sort": source.get("sort", "hot"),
             "mode": mode,
             "priority": source.get("priority", 3),
-            "topics": source.get("topics", []),
+            "topic": get_source_topic(source),
             "status": "ok",
             "attempts": 1,
             "items": len(articles),
@@ -243,7 +249,7 @@ def fetch_source(source: Dict[str, Any], hours: int) -> Dict[str, Any]:
             "sort": source.get("sort", "hot"),
             "mode": mode,
             "priority": source.get("priority", 3),
-            "topics": source.get("topics", []),
+            "topic": get_source_topic(source),
             "status": "error",
             "attempts": 1,
             "error": str(exc)[:200],

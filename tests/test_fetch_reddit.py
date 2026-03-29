@@ -31,7 +31,7 @@ class TestFetchReddit(unittest.TestCase):
                 "num_comments": 5,
                 "selftext": "",
             },
-            {"topics": ["ai-models"], "min_score": 50},
+            {"topic": "ai-frontier", "min_score": 50},
         )
         self.assertIsNone(article)
 
@@ -46,7 +46,7 @@ class TestFetchReddit(unittest.TestCase):
                 "num_comments": 12,
                 "selftext": "summary",
             },
-            {"topics": ["ai-models"], "min_score": 50},
+            {"topic": "ai-frontier", "min_score": 50},
         )
         self.assertEqual(article["reddit_url"], "https://www.reddit.com/r/OpenAI/comments/abc/openai_ships_something/")
         self.assertEqual(article["link"], "https://example.com/article")

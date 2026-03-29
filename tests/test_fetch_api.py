@@ -58,7 +58,7 @@ class TestFetchApi(unittest.TestCase):
 
         self.assertEqual(len(articles), 2)
         self.assertEqual(articles[0]["source_id"], "hacker-news-api")
-        self.assertEqual(articles[0]["topics"], ["technology", "developer-tools"])
+        self.assertEqual(articles[0]["topic"], "technology")
         self.assertEqual(articles[0]["score"], 123)
         self.assertEqual(articles[0]["comments"], 45)
         self.assertEqual(

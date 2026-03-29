@@ -11,6 +11,13 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
+try:
+    from topic_utils import get_source_topic
+except ImportError:
+    import sys
+    sys.path.append(str(Path(__file__).parent))
+    from topic_utils import get_source_topic
+
 logger = logging.getLogger(__name__)
 
 SOURCE_TYPES = ("rss", "twitter", "github", "reddit")
@@ -47,6 +54,10 @@ def flatten_sources_config(config_data: Dict[str, Any], source_name: str) -> Lis
                     normalized_type,
                 )
             normalized["type"] = normalized_type
+            topic = get_source_topic(normalized)
+            if topic:
+                normalized["topic"] = topic
+            normalized.pop("topics", None)
             flattened.append(normalized)
 
     return flattened

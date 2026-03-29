@@ -25,6 +25,12 @@ except ImportError:
     sys.path.append(str(Path(__file__).parent))
     from config_loader import load_merged_sources
 
+try:
+    from topic_utils import get_source_topic
+except ImportError:
+    sys.path.append(str(Path(__file__).parent))
+    from topic_utils import get_source_topic
+
 COOLDOWN_SECONDS = float(os.environ.get("BB_BROWSER_TWITTER_COOLDOWN_SECONDS", "7.0"))
 DEFAULT_TIMEOUT = 180
 DEFAULT_COUNT = 20
@@ -146,7 +152,7 @@ def parse_tweet(item: Dict[str, Any], source: Dict[str, Any], cutoff: datetime) 
         "title": text,
         "link": link,
         "date": tweet_dt.isoformat(),
-        "topics": source.get("topics", [])[:],
+        "topic": get_source_topic(source),
         "metrics": {
             "like_count": likes,
             "retweet_count": retweets,
@@ -176,7 +182,7 @@ def fetch_source(source: Dict[str, Any], cutoff: datetime) -> Dict[str, Any]:
             "name": source.get("name", source.get("id", "unknown")),
             "handle": source.get("handle"),
             "priority": source.get("priority", 3),
-            "topics": source.get("topics", []),
+            "topic": get_source_topic(source),
             "status": "ok",
             "attempts": 1,
             "items": len(articles),
@@ -190,7 +196,7 @@ def fetch_source(source: Dict[str, Any], cutoff: datetime) -> Dict[str, Any]:
             "name": source.get("name", source.get("id", "unknown")),
             "handle": source.get("handle"),
             "priority": source.get("priority", 3),
-            "topics": source.get("topics", []),
+            "topic": get_source_topic(source),
             "status": "error",
             "attempts": 1,
             "error": str(exc)[:200],

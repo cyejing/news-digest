@@ -92,7 +92,7 @@ class TestRunPipeline(unittest.TestCase):
         payload = {
             "topics": [
                 {
-                    "topic_id": "ai-models",
+                    "topic_id": "ai-frontier",
                     "status": "ok",
                     "query_stats": [
                         {"query": "openai", "status": "ok", "count": 4},
@@ -113,7 +113,7 @@ class TestRunPipeline(unittest.TestCase):
             "calls_kind": "queries",
             "topics": [
                 {
-                    "topic_id": "ai-models",
+                    "topic_id": "ai-frontier",
                     "status": "ok",
                     "query_stats": [{"query": "openai", "status": "ok", "count": 3}],
                 }
@@ -171,7 +171,7 @@ class TestRunPipeline(unittest.TestCase):
             "total_articles": 192,
             "topics": [
                 {
-                    "topic_id": "ai-models",
+                    "topic_id": "ai-frontier",
                     "status": "ok",
                     "count": 20,
                     "query_stats": [

@@ -6,7 +6,8 @@
     "web_articles": 4,
     "github_articles": 3,
     "reddit_posts": 4,
-    "total_input": 23
+    "total_input": 23,
+    "by_topic": {}
   },
   "processing": {
     "deduplication_applied": true,
@@ -19,133 +20,105 @@
     "topics_count": 4,
     "topic_distribution": {
       "github": 3,
-      "ai-ecosystem": 2,
+      "ai-infra": 2,
       "technology": 2,
-      "macro-policy": 1
+      "business": 1
     }
   },
   "topics": {
     "github": {
-      "count": 3,
       "articles": [
         {
           "title": "Ollama v0.18.0 improves multimodal serving and structured outputs",
           "link": "https://github.com/ollama/ollama/releases/tag/v0.18.0",
           "date": "2026-03-28T02:40:00+00:00",
-          "topics": [
-            "github"
-          ],
           "source_type": "github",
           "source_name": "Ollama",
           "source_id": "ollama-github",
           "quality_score": 14.0,
-          "primary_topic": "github"
+          "topic": "github"
         },
         {
           "title": "AutoGen v0.6.0 expands multi-agent orchestration and observability",
           "link": "https://github.com/microsoft/autogen/releases/tag/v0.6.0",
           "date": "2026-03-27T18:40:00+00:00",
-          "topics": [
-            "github"
-          ],
           "source_type": "github",
           "source_name": "AutoGen",
           "source_id": "autogen-github",
           "quality_score": 12.5,
-          "primary_topic": "github"
+          "topic": "github"
         },
         {
           "title": "Trending repo: project adds a new open source agent runtime",
           "link": "https://github.com/example/project",
           "date": "2026-03-27T12:00:00+00:00",
-          "topics": [
-            "github"
-          ],
           "source_type": "github_trending",
           "source_name": "GitHub Trending",
           "source_id": "github-trending",
           "quality_score": 11.0,
-          "primary_topic": "github"
+          "topic": "github"
         }
       ]
     },
-    "ai-ecosystem": {
-      "count": 2,
+    "ai-infra": {
       "articles": [
         {
           "title": "Tesla supplier chain rides new optimism around humanoid robot production",
           "link": "https://semiengineering.com/2026/03/28/tesla-supplier-chain-humanoid-robots/",
           "date": "2026-03-28T02:35:00+00:00",
-          "topics": [
-            "ai-ecosystem"
-          ],
           "source_type": "rss",
           "source_name": "Semiconductor Engineering",
           "source_id": "semiengineering-rss",
           "quality_score": 13.0,
-          "primary_topic": "ai-ecosystem"
+          "topic": "ai-infra"
         },
         {
           "title": "Optimus matters because robotics, AI and manufacturing improve together.",
           "link": "https://x.com/elonmusk/status/2030010000000000001",
           "date": "2026-03-28T03:50:00+00:00",
-          "topics": [
-            "ai-ecosystem"
-          ],
           "source_type": "twitter",
           "source_name": "@elonmusk",
           "source_id": "elon-twitter",
           "quality_score": 11.0,
-          "primary_topic": "ai-ecosystem"
+          "topic": "ai-infra"
         }
       ]
     },
     "technology": {
-      "count": 2,
       "articles": [
         {
           "title": "Quantum networking research moves from lab milestone toward real deployment tests",
           "link": "https://www.bbc.com/news/science-environment-20260328-quantum-networking",
           "date": "2026-03-28T01:10:00+00:00",
-          "topics": [
-            "technology"
-          ],
           "source_type": "rss",
           "source_name": "BBC Science",
           "source_id": "bbc-science-rss",
           "quality_score": 12.0,
-          "primary_topic": "technology"
+          "topic": "technology"
         },
         {
           "title": "NPR looks at the next wave of engineering breakthroughs in consumer robotics",
           "link": "https://www.npr.org/2026/03/28/robotics-breakthroughs",
           "date": "2026-03-28T00:10:00+00:00",
-          "topics": [
-            "technology"
-          ],
           "source_type": "rss",
           "source_name": "NPR Science",
           "source_id": "npr-science-rss",
           "quality_score": 10.8,
-          "primary_topic": "technology"
+          "topic": "technology"
         }
       ]
     },
-    "macro-policy": {
-      "count": 1,
+    "business": {
       "articles": [
         {
           "title": "Federal Reserve holds rates steady and signals data-dependent path",
           "link": "https://www.federalreserve.gov/newsevents/pressreleases/monetary20260328a.htm",
           "date": "2026-03-28T03:00:00+00:00",
-          "topics": [
-            "macro-policy"
-          ],
           "source_type": "rss",
           "source_name": "Federal Reserve Monetary Policy",
           "source_id": "fed-monetary-policy-rss",
           "quality_score": 14.0,
-          "primary_topic": "macro-policy"
+          "topic": "business"
         }
       ]
     }

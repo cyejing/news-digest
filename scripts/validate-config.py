@@ -16,6 +16,12 @@ import sys
 from pathlib import Path
 from typing import Dict, Any, Set
 
+try:
+    from topic_utils import get_source_topic
+except ImportError:
+    sys.path.append(str(Path(__file__).parent))
+    from topic_utils import get_source_topic
+
 SOURCE_TYPES = ("rss", "twitter", "github", "reddit")
 
 try:
@@ -137,16 +143,14 @@ def validate_sources_consistency(sources_data: Dict[str, Any],
     # Check source topic references
     for source in flat_sources:
         source_id = source.get("id", "unknown")
-        source_topics = set(source.get("topics", []))
+        source_topic = get_source_topic(source)
         
         # Check for invalid topic references
-        invalid_topics = source_topics - valid_topics
-        if invalid_topics:
-            errors.append(f"Source '{source_id}' references invalid topics: {invalid_topics}")
+        if source_topic and source_topic not in valid_topics:
+            errors.append(f"Source '{source_id}' references invalid topic: {source_topic}")
             
-        # Check for empty topic lists
-        if not source_topics:
-            errors.append(f"Source '{source_id}' has no topics assigned")
+        if not source_topic:
+            errors.append(f"Source '{source_id}' has no topic assigned")
             
     # Check for duplicate source IDs
     source_ids = [source.get("id") for source in flat_sources]

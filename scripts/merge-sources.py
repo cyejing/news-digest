@@ -22,6 +22,12 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from urllib.parse import urlparse
 
 try:
+    from topic_utils import resolve_primary_topic
+except ImportError:
+    sys.path.append(str(Path(__file__).parent))
+    from topic_utils import resolve_primary_topic
+
+try:
     from rapidfuzz import fuzz
 except ImportError:  # pragma: no cover - defensive fallback
     fuzz = None
@@ -593,14 +599,9 @@ def merge_cluster_metadata(canonical: Dict[str, Any], cluster_articles: List[Dic
     canonical["similarity_debug"]["duplicate_cluster_id"] = cluster_id
     canonical["similarity_debug"]["cluster_size"] = len(cluster_articles)
 
-    merged_topics = []
-    seen_topics = set()
-    for article in cluster_articles:
-        for topic in article.get("topics", []):
-            if topic not in seen_topics:
-                seen_topics.add(topic)
-                merged_topics.append(topic)
-    canonical["topics"] = merged_topics or canonical.get("topics", [])
+    merged_topic = resolve_primary_topic(cluster_articles, default=canonical.get("topic", ""))
+    if merged_topic:
+        canonical["topic"] = merged_topic
     return canonical
 
 
@@ -748,38 +749,18 @@ def rerank_topic_articles(articles: List[Dict[str, Any]]) -> List[Dict[str, Any]
 def group_by_topics(articles: List[Dict[str, Any]], dedup_across_topics: bool = True) -> Dict[str, List[Dict[str, Any]]]:
     topic_groups: Dict[str, List[Dict[str, Any]]] = {}
     seen_article_ids: Set[str] = set()
-    topic_priority = {
-        "ai-models": 0,
-        "ai-agents": 1,
-        "ai-ecosystem": 2,
-        "technology": 3,
-        "developer-tools": 4,
-        "markets-business": 5,
-        "macro-policy": 6,
-        "world-affairs": 7,
-        "cybersecurity": 8,
-        "github": 9,
-        "trending": 13,
-        "uncategorized": 99,
-    }
-
-    def get_topic_priority(topic: str) -> int:
-        return topic_priority.get(topic, 99)
 
     for article in articles:
-        topics = article.get("topics", []) or ["uncategorized"]
-        sorted_topics = sorted(topics, key=get_topic_priority)
+        primary_topic = resolve_primary_topic(article, default="uncategorized") or "uncategorized"
         article_id = normalize_title(article.get("title", ""))
 
         if dedup_across_topics and article_id in seen_article_ids:
             continue
         seen_article_ids.add(article_id)
 
-        primary_topic = sorted_topics[0]
         topic_groups.setdefault(primary_topic, [])
         article_copy = article.copy()
-        article_copy["primary_topic"] = primary_topic
-        article_copy["all_topics"] = topics
+        article_copy["topic"] = primary_topic
         topic_groups[primary_topic].append(article_copy)
 
     for topic, topic_articles in topic_groups.items():
@@ -793,7 +774,7 @@ def group_by_topics(articles: List[Dict[str, Any]], dedup_across_topics: bool = 
 # Input normalization
 # ---------------------------------------------------------------------------
 
-def build_article(title: str, link: str, date: str, source_type: str, source_name: str, source_id: str, source_priority: int, topics: List[str], **extra: Any) -> Dict[str, Any]:
+def build_article(title: str, link: str, date: str, source_type: str, source_name: str, source_id: str, source_priority: int, topic: str, **extra: Any) -> Dict[str, Any]:
     article = {
         "title": title,
         "link": link,
@@ -802,7 +783,7 @@ def build_article(title: str, link: str, date: str, source_type: str, source_nam
         "source_name": source_name,
         "source_id": source_id,
         "source_priority": source_priority,
-        "topics": topics,
+        "topic": topic,
     }
     article.update(extra)
     return article
@@ -908,7 +889,7 @@ def collect_articles(
                 source_name="GitHub Trending",
                 source_id=f"trending-{repo.get('repo', '')}",
                 source_priority=4,
-                topics=repo.get("topics", []),
+                topic=resolve_primary_topic(repo, default="github"),
                 snippet=repo.get("description", ""),
                 stars=repo.get("stars", 0),
                 daily_stars_est=repo.get("daily_stars_est", 0),

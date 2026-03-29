@@ -1,11 +1,11 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Tech Digest Configuration Schema",
-  "version": "2.6.0",
+  "version": "3.0.0",
   "definitions": {
     "source": {
       "type": "object",
-      "required": ["id", "type", "name", "enabled", "priority", "topics"],
+      "required": ["id", "type", "name", "enabled", "priority", "topic"],
       "properties": {
         "id": {
           "type": "string",
@@ -30,12 +30,9 @@
           "maximum": 10,
           "description": "Priority hint from 1-10. In practice, keep most sources near 3, use 4 for clearly authoritative sources, and reserve 5+ for a very small number of top-tier primary sources."
         },
-        "topics": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Topic IDs this source contributes to"
+        "topic": {
+          "type": "string",
+          "description": "Single primary topic ID for this source"
         },
         "note": {
           "type": "string",
@@ -132,10 +129,6 @@
                 "type": "string"
               },
               "description": "Keywords to exclude"
-            },
-            "github_query": {
-              "type": "string",
-              "description": "Legacy single query for GitHub trending search"
             },
             "github_queries": {
               "type": "array",

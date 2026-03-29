@@ -124,14 +124,6 @@ def load_github_trending_queries(defaults_dir: Path, config_dir: Optional[Path] 
                         "q": github_query,
                     })
 
-        if not queries:
-            github_query = search_config.get("github_query")
-            if github_query:
-                queries.append({
-                    "topic": "github",
-                    "q": github_query,
-                })
-
     logging.info(f"从配置加载了 {len(queries)} 个 GitHub Trending 查询")
     return queries
 
@@ -178,7 +170,7 @@ def fetch_trending_repos(hours: int = 48, github_token: Optional[str] = None,
         - daily_stars_est: 估算的每日星标增长
         - forks: Fork 数
         - language: 主要编程语言
-        - topics: 主题标签列表
+        - topic: 单个主题标签
         - created_at: 创建时间
         - pushed_at: 最后推送时间
         - source_type: 数据源类型
@@ -249,7 +241,7 @@ def fetch_trending_repos(hours: int = 48, github_token: Optional[str] = None,
                     "daily_stars_est": daily_stars,
                     "forks": item.get("forks_count", 0),
                     "language": item.get("language", ""),
-                    "topics": [tq["topic"]],
+                    "topic": tq["topic"],
                     "created_at": item.get("created_at", ""),
                     "pushed_at": item.get("pushed_at", ""),
                     "source_type": "github_trending",

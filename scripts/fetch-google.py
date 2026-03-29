@@ -128,7 +128,7 @@ def fetch_topic(topic: Dict[str, Any], logger: logging.Logger) -> Dict[str, Any]
                         item.get("timestamp", time.time()),
                         tz=timezone.utc,
                     ).isoformat(),
-                    "topics": [topic.get("id")],
+                    "topic": topic.get("id"),
                     "publisher": normalize_text(item.get("source", "")),
                     "google_query": compiled_query,
                 }

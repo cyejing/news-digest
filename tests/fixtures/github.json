@@ -15,9 +15,6 @@
       "name": "Ollama",
       "repo": "ollama/ollama",
       "priority": 8,
-      "topics": [
-        "github"
-      ],
       "status": "ok",
       "attempts": 1,
       "count": 2,
@@ -27,20 +24,17 @@
           "link": "https://github.com/ollama/ollama/releases/tag/v0.18.0",
           "date": "2026-03-28T03:12:00+00:00",
           "summary": "Adds improved multimodal model support and faster structured output handling.",
-          "topics": [
-            "github"
-          ]
+          "topic": "github"
         },
         {
           "title": "ollama v0.17.9",
           "link": "https://github.com/ollama/ollama/releases/tag/v0.17.9",
           "date": "2026-03-28T00:45:00+00:00",
           "summary": "Fixes model loading regressions and improves tool-call parsing.",
-          "topics": [
-            "github"
-          ]
+          "topic": "github"
         }
-      ]
+      ],
+      "topic": "github"
     },
     {
       "source_id": "openclaw-github",
@@ -48,9 +42,6 @@
       "name": "OpenClaw",
       "repo": "openclaw/openclaw",
       "priority": 8,
-      "topics": [
-        "github"
-      ],
       "status": "ok",
       "attempts": 1,
       "count": 2,
@@ -60,20 +51,17 @@
           "link": "https://github.com/openclaw/openclaw/releases/tag/v2026.3.28",
           "date": "2026-03-28T02:10:00+00:00",
           "summary": "Improves automation orchestration, prompt packaging and remote tool execution reliability.",
-          "topics": [
-            "github"
-          ]
+          "topic": "github"
         },
         {
           "title": "openclaw v2026.3.28-beta.1",
           "link": "https://github.com/openclaw/openclaw/releases/tag/v2026.3.28-beta.1",
           "date": "2026-03-27T21:30:00+00:00",
           "summary": "Adds experimental support for richer task plans and better background agent coordination.",
-          "topics": [
-            "github"
-          ]
+          "topic": "github"
         }
-      ]
+      ],
+      "topic": "github"
     },
     {
       "source_id": "autogen-github",
@@ -81,9 +69,6 @@
       "name": "AutoGen",
       "repo": "microsoft/autogen",
       "priority": 8,
-      "topics": [
-        "github"
-      ],
       "status": "ok",
       "attempts": 1,
       "count": 1,
@@ -93,11 +78,10 @@
           "link": "https://github.com/microsoft/autogen/releases/tag/v0.6.0",
           "date": "2026-03-28T01:05:00+00:00",
           "summary": "Expands multi-agent coordination primitives and tool-use observability.",
-          "topics": [
-            "github"
-          ]
+          "topic": "github"
         }
-      ]
+      ],
+      "topic": "github"
     },
     {
       "source_id": "mem0-github",
@@ -105,9 +89,6 @@
       "name": "Mem0",
       "repo": "mem0ai/mem0",
       "priority": 6,
-      "topics": [
-        "github"
-      ],
       "status": "ok",
       "attempts": 1,
       "count": 1,
@@ -117,11 +98,10 @@
           "link": "https://github.com/mem0ai/mem0/releases/tag/v1.2.0",
           "date": "2026-03-27T23:50:00+00:00",
           "summary": "Improves long-term memory retrieval, observability and integration ergonomics.",
-          "topics": [
-            "github"
-          ]
+          "topic": "github"
         }
-      ]
+      ],
+      "topic": "github"
     }
   ]
 }

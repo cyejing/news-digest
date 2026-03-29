@@ -336,7 +336,7 @@ class TestSourceHealth(unittest.TestCase):
                 call_stats={"kind": "queries", "total_calls": 11, "ok_calls": 10, "failed_calls": 1},
                 failed_items=[
                     {
-                        "id": "ai-models",
+                        "id": "ai-frontier",
                         "error": "[error] site google/news: Error: Timed out loading Google news results\nReport: very noisy tail",
                     }
                 ],
@@ -347,7 +347,7 @@ class TestSourceHealth(unittest.TestCase):
 
         output = "\n".join(source_health.render_run_details(diagnostics))
         self.assertIn("⚠️ Google News - calls:10/1/11 | items:192 | elapsed:583.1s", output)
-        self.assertIn("ai-models: [error] site google/news: Error: Timed out loading Google news results | Report: very noisy tail", output)
+        self.assertIn("ai-frontier: [error] site google/news: Error: Timed out loading Google news results | Report: very noisy tail", output)
 
 
 if __name__ == "__main__":

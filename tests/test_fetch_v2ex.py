@@ -31,7 +31,7 @@ class TestFetchV2EX(unittest.TestCase):
         )
 
         self.assertIsNotNone(article)
-        self.assertIn("developer-tools", article["topics"])
+        self.assertEqual(article["topic"], "technology")
         self.assertEqual(article["replies"], 90)
 
     def test_transform_topic_drops_non_tech_threads(self):

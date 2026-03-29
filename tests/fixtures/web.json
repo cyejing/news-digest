@@ -10,7 +10,7 @@
   "total_articles": 6,
   "topics": [
     {
-      "topic_id": "world-affairs",
+      "topic_id": "world",
       "status": "ok",
       "queries_executed": 2,
       "queries_ok": 2,
@@ -33,23 +33,19 @@
           "link": "https://example.com/global-shipping-conflict-risk",
           "snippet": "Diplomatic tensions and security concerns continue to affect logistics and energy markets.",
           "date": "2026-03-28T03:30:00+00:00",
-          "topics": [
-            "world-affairs"
-          ]
+          "topic": "world"
         },
         {
           "title": "European leaders debate sanctions and defense coordination",
           "link": "https://example.com/europe-sanctions-defense-coordination",
           "snippet": "The latest talks highlight the growing overlap between diplomacy, security and industrial policy.",
           "date": "2026-03-28T02:15:00+00:00",
-          "topics": [
-            "world-affairs"
-          ]
+          "topic": "world"
         }
       ]
     },
     {
-      "topic_id": "macro-policy",
+      "topic_id": "business",
       "status": "ok",
       "queries_executed": 2,
       "queries_ok": 2,
@@ -72,23 +68,19 @@
           "link": "https://example.com/rate-cut-expectations-cool",
           "snippet": "Fresh inflation prints are pushing traders to rethink the timing of policy easing.",
           "date": "2026-03-28T01:55:00+00:00",
-          "topics": [
-            "macro-policy"
-          ]
+          "topic": "business"
         },
         {
           "title": "Central banks widen scrutiny of AI-linked concentration in capital spending",
           "link": "https://example.com/central-banks-ai-capex-scrutiny",
           "snippet": "Officials are increasingly watching how AI investment cycles shape financial conditions.",
           "date": "2026-03-28T00:35:00+00:00",
-          "topics": [
-            "macro-policy"
-          ]
+          "topic": "business"
         }
       ]
     },
     {
-      "topic_id": "ai-ecosystem",
+      "topic_id": "ai-infra",
       "status": "ok",
       "queries_executed": 2,
       "queries_ok": 2,
@@ -111,18 +103,14 @@
           "link": "https://example.com/ai-server-vendors-memory-makers-rally",
           "snippet": "The market is increasingly treating AI hardware, memory and cloud capex as one trade.",
           "date": "2026-03-28T03:05:00+00:00",
-          "topics": [
-            "ai-ecosystem"
-          ]
+          "topic": "ai-infra"
         },
         {
           "title": "SpaceX, Tesla and robotics suppliers anchor the new physical AI narrative",
           "link": "https://example.com/physical-ai-narrative",
           "snippet": "Investors are broadening AI exposure from software into launch, mobility and robotics chains.",
           "date": "2026-03-27T23:45:00+00:00",
-          "topics": [
-            "ai-ecosystem"
-          ]
+          "topic": "ai-infra"
         }
       ]
     }

@@ -15,9 +15,6 @@
       "name": "Elon Musk",
       "handle": "elonmusk",
       "priority": 8,
-      "topics": [
-        "ai-ecosystem"
-      ],
       "status": "ok",
       "attempts": 1,
       "count": 2,
@@ -26,9 +23,6 @@
           "title": "Optimus matters because robotics, AI and manufacturing improve together.",
           "link": "https://x.com/elonmusk/status/2030010000000000001",
           "date": "2026-03-28T03:50:00+00:00",
-          "topics": [
-            "ai-ecosystem"
-          ],
           "metrics": {
             "like_count": 15420,
             "retweet_count": 1820,
@@ -36,15 +30,13 @@
             "quote_count": 520,
             "impression_count": 2480000
           },
-          "tweet_id": "2030010000000000001"
+          "tweet_id": "2030010000000000001",
+          "topic": "ai-infra"
         },
         {
           "title": "Starship, Tesla and xAI all compound on the same long-term bet: real-world intelligence at industrial scale.",
           "link": "https://x.com/elonmusk/status/2030010000000000002",
           "date": "2026-03-28T01:20:00+00:00",
-          "topics": [
-            "ai-ecosystem"
-          ],
           "metrics": {
             "like_count": 9800,
             "retweet_count": 1210,
@@ -52,9 +44,11 @@
             "quote_count": 310,
             "impression_count": 1710000
           },
-          "tweet_id": "2030010000000000002"
+          "tweet_id": "2030010000000000002",
+          "topic": "ai-infra"
         }
-      ]
+      ],
+      "topic": "ai-infra"
     },
     {
       "source_id": "sama-twitter",
@@ -62,10 +56,6 @@
       "name": "Sam Altman (OpenAI CEO)",
       "handle": "sama",
       "priority": 8,
-      "topics": [
-        "ai-models",
-        "ai-agents"
-      ],
       "status": "ok",
       "attempts": 1,
       "count": 2,
@@ -74,10 +64,6 @@
           "title": "Inference, tooling and product design now matter as much as raw model quality.",
           "link": "https://x.com/sama/status/2030010000000000003",
           "date": "2026-03-28T02:40:00+00:00",
-          "topics": [
-            "ai-models",
-            "ai-agents"
-          ],
           "metrics": {
             "like_count": 6400,
             "retweet_count": 510,
@@ -85,16 +71,13 @@
             "quote_count": 120,
             "impression_count": 910000
           },
-          "tweet_id": "2030010000000000003"
+          "tweet_id": "2030010000000000003",
+          "topic": "ai-frontier"
         },
         {
           "title": "Agentic workflows are getting good enough to reshape how teams operate.",
           "link": "https://x.com/sama/status/2030010000000000004",
           "date": "2026-03-27T22:10:00+00:00",
-          "topics": [
-            "ai-models",
-            "ai-agents"
-          ],
           "metrics": {
             "like_count": 5200,
             "retweet_count": 430,
@@ -102,9 +85,11 @@
             "quote_count": 88,
             "impression_count": 760000
           },
-          "tweet_id": "2030010000000000004"
+          "tweet_id": "2030010000000000004",
+          "topic": "ai-frontier"
         }
-      ]
+      ],
+      "topic": "ai-frontier"
     },
     {
       "source_id": "jimfan-twitter",
@@ -112,10 +97,6 @@
       "name": "Jim Fan (NVIDIA)",
       "handle": "DrJimFan",
       "priority": 8,
-      "topics": [
-        "ai-ecosystem",
-        "technology"
-      ],
       "status": "ok",
       "attempts": 1,
       "count": 2,
@@ -124,10 +105,6 @@
           "title": "Generalist robotics needs better world models, stronger simulation and a lot more GPU horsepower.",
           "link": "https://x.com/DrJimFan/status/2030010000000000005",
           "date": "2026-03-28T00:35:00+00:00",
-          "topics": [
-            "ai-ecosystem",
-            "technology"
-          ],
           "metrics": {
             "like_count": 4300,
             "retweet_count": 380,
@@ -135,16 +112,13 @@
             "quote_count": 70,
             "impression_count": 520000
           },
-          "tweet_id": "2030010000000000005"
+          "tweet_id": "2030010000000000005",
+          "topic": "ai-infra"
         },
         {
           "title": "Humanoid robotics is turning into a full-stack systems challenge across chips, data and control.",
           "link": "https://x.com/DrJimFan/status/2030010000000000006",
           "date": "2026-03-27T21:45:00+00:00",
-          "topics": [
-            "ai-ecosystem",
-            "technology"
-          ],
           "metrics": {
             "like_count": 3900,
             "retweet_count": 340,
@@ -152,9 +126,11 @@
             "quote_count": 62,
             "impression_count": 460000
           },
-          "tweet_id": "2030010000000000006"
+          "tweet_id": "2030010000000000006",
+          "topic": "ai-infra"
         }
-      ]
+      ],
+      "topic": "ai-infra"
     }
   ]
 }

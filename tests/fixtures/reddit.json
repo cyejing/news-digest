@@ -16,10 +16,6 @@
       "subreddit": "singularity",
       "sort": "hot",
       "priority": 4,
-      "topics": [
-        "ai-ecosystem",
-        "technology"
-      ],
       "status": "ok",
       "attempts": 1,
       "count": 2,
@@ -34,15 +30,12 @@
           "num_comments": 142,
           "flair": "Discussion",
           "is_self": true,
-          "topics": [
-            "ai-ecosystem",
-            "technology"
-          ],
           "metrics": {
             "score": 1840,
             "num_comments": 142,
             "upvote_ratio": 0.96
-          }
+          },
+          "topic": "ai-infra"
         },
         {
           "title": "Tesla Optimus may be overhyped near term, but the humanoid supply chain is becoming investable",
@@ -54,17 +47,15 @@
           "num_comments": 88,
           "flair": "Analysis",
           "is_self": true,
-          "topics": [
-            "ai-ecosystem",
-            "technology"
-          ],
           "metrics": {
             "score": 920,
             "num_comments": 88,
             "upvote_ratio": 0.93
-          }
+          },
+          "topic": "ai-infra"
         }
-      ]
+      ],
+      "topic": "ai-infra"
     },
     {
       "source_id": "reddit-artificial",
@@ -73,10 +64,6 @@
       "subreddit": "artificial",
       "sort": "hot",
       "priority": 4,
-      "topics": [
-        "ai-models",
-        "ai-agents"
-      ],
       "status": "ok",
       "attempts": 1,
       "count": 2,
@@ -91,15 +78,12 @@
           "num_comments": 37,
           "flair": "News",
           "is_self": false,
-          "topics": [
-            "ai-models",
-            "ai-agents"
-          ],
           "metrics": {
             "score": 455,
             "num_comments": 37,
             "upvote_ratio": 0.99
-          }
+          },
+          "topic": "ai-frontier"
         },
         {
           "title": "Invisible prompt injection still breaks agentic workflows in surprising ways",
@@ -111,17 +95,15 @@
           "num_comments": 20,
           "flair": "Discussion",
           "is_self": false,
-          "topics": [
-            "ai-models",
-            "ai-agents"
-          ],
           "metrics": {
             "score": 105,
             "num_comments": 20,
             "upvote_ratio": 0.97
-          }
+          },
+          "topic": "ai-frontier"
         }
-      ]
+      ],
+      "topic": "ai-frontier"
     }
   ]
 }

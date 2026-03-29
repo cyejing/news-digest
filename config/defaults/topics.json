@@ -1,245 +1,64 @@
 {
-  "_description": "Enhanced topic definitions for tech digest. Each topic defines a report section with search queries, filters, and display preferences.",
-  "_updated": "2026-03-28",
-  "_version": "4.1.0",
+  "_description": "Single-topic taxonomy for global tech and AI hotspots. Subtopics win over top-level categories when classification is precise.",
+  "_updated": "2026-03-30",
+  "_version": "5.0.0",
   "topics": [
     {
-      "id": "ai-models",
+      "id": "ai-frontier",
       "emoji": "🧠",
-      "label": "AI Models / 模型进展",
-      "description": "基础模型、大语言模型、模型发布、评测与核心能力演进",
+      "label": "AI Frontier / AI 前沿",
+      "description": "模型、agents、AI 应用、AI lab 发布与前沿 AI 产品化动态。",
       "search": {
         "queries": [
           "foundation model release",
-          "LLM model update",
-          "GPT Claude Gemini release",
-          "大模型 发布 评测"
+          "LLM update AI agents copilot",
+          "AI application launch agentic workflow",
+          "大模型 智能体 AI 应用 发布"
         ],
         "twitter_queries": [
-          "GPT-5",
+          "GPT",
           "Claude",
-          "大模型"
+          "Gemini",
+          "AI agent",
+          "智能体"
         ],
-        "github_query": "",
         "exclude": [
           "tutorial",
-          "beginner guide"
+          "beginner guide",
+          "travel agent"
         ]
       },
       "display": {
-        "max_items": 8,
+        "max_items": 10,
         "style": "detailed"
       }
     },
     {
-      "id": "ai-agents",
-      "emoji": "🤖",
-      "label": "AI Agents / 智能体",
-      "description": "智能体系统、Agent 框架、自动化工作流、Copilot 与 Agentic 应用",
+      "id": "ai-infra",
+      "emoji": "⚙️",
+      "label": "AI Infra / AI 基础设施",
+      "description": "芯片、内存、电力、数据中心、算力、机器人、智能驾驶、Tesla、SpaceX 与太空算力。",
       "search": {
         "queries": [
-          "AI agent framework",
-          "agentic AI product launch",
-          "autonomous agent workflow",
-          "智能体 框架 自动化"
+          "AI infrastructure GPU datacenter power memory",
+          "semiconductor compute robotics autonomous driving",
+          "Tesla SpaceX robotics server cluster",
+          "AI 芯片 算力 电力 机器人 智驾 SpaceX"
         ],
         "twitter_queries": [
-          "AI agent",
-          "autonomous agent",
-          "AI 智能体"
-        ],
-        "github_query": "",
-        "exclude": [
-          "travel agent",
-          "game agent"
-        ]
-      },
-      "display": {
-        "max_items": 6,
-        "style": "compact"
-      }
-    },
-    {
-      "id": "ai-ecosystem",
-      "emoji": "🦾",
-      "label": "AI Ecosystem / AI 产业链",
-      "description": "AI 芯片、内存、算力、服务器、机器人、自动驾驶，以及 Tesla、SpaceX、xAI 等 AI 产业链动态",
-      "search": {
-        "queries": [
-          "AI chip GPU semiconductor",
-          "AI infrastructure datacenter server memory",
-          "humanoid robot Tesla SpaceX",
-          "人工智能芯片 算力 机器人 特斯拉"
-        ],
-        "twitter_queries": [
-          "AI chip",
+          "GPU",
+          "robotics",
           "Tesla",
-          "机器人"
+          "SpaceX",
+          "datacenter"
         ],
-        "github_query": "",
         "exclude": [
           "smartphone review",
           "game review"
         ]
       },
       "display": {
-        "max_items": 6,
-        "style": "compact"
-      }
-    },
-    {
-      "id": "technology",
-      "emoji": "🔬",
-      "label": "Technology / 科技动态",
-      "description": "广义科技、工程突破、科研进展与科技产业动态，不含已被 AI 细分主题覆盖的内容",
-      "search": {
-        "queries": [
-          "technology research breakthrough",
-          "science engineering breakthrough",
-          "emerging technology industry",
-          "科技 研究 突破 工程"
-        ],
-        "twitter_queries": [
-          "technology",
-          "科技",
-          "engineering"
-        ],
-        "github_query": "",
-        "exclude": [
-          "rumor",
-          "unverified"
-        ]
-      },
-      "display": {
-        "max_items": 8,
-        "style": "detailed"
-      }
-    },
-    {
-      "id": "developer-tools",
-      "emoji": "👨‍💻",
-      "label": "Developer Tools / 开发工具",
-      "description": "开发工具、开源基础设施、软件工程实践与编程生态",
-      "search": {
-        "queries": [
-          "developer tools open source",
-          "software engineering tooling",
-          "programming framework release",
-          "开发工具 开源 软件工程"
-        ],
-        "twitter_queries": [
-          "developer tools",
-          "programming",
-          "开源"
-        ],
-        "github_query": "",
-        "exclude": [
-          "tutorial",
-          "beginner guide"
-        ]
-      },
-      "display": {
-        "max_items": 6,
-        "style": "compact"
-      }
-    },
-    {
-      "id": "markets-business",
-      "emoji": "💰",
-      "label": "Markets & Business / 市场与商业",
-      "description": "资本市场、公司、商业竞争、投资动向与行业格局",
-      "search": {
-        "queries": [
-          "capital markets business",
-          "stock market company earnings",
-          "global business industry",
-          "市场 商业 投资 公司"
-        ],
-        "twitter_queries": [
-          "markets",
-          "business",
-          "投资"
-        ],
-        "github_query": "",
-        "exclude": []
-      },
-      "display": {
-        "max_items": 6,
-        "style": "compact"
-      }
-    },
-    {
-      "id": "macro-policy",
-      "emoji": "📊",
-      "label": "Macro Policy / 宏观政策",
-      "description": "宏观经济、央行政策、监管、财政与官方制度变化",
-      "search": {
-        "queries": [
-          "central bank inflation regulation",
-          "macro economy fiscal policy",
-          "interest rates economic policy",
-          "宏观经济 央行 利率 监管"
-        ],
-        "twitter_queries": [
-          "macro",
-          "inflation",
-          "政策"
-        ],
-        "github_query": "",
-        "exclude": []
-      },
-      "display": {
-        "max_items": 6,
-        "style": "compact"
-      }
-    },
-    {
-      "id": "world-affairs",
-      "emoji": "🌍",
-      "label": "World Affairs / 国际事务",
-      "description": "国际政治、外交关系、地区冲突、地缘博弈与全球政局",
-      "search": {
-        "queries": [
-          "geopolitics diplomacy conflict",
-          "sanctions war election government",
-          "international relations security",
-          "国际政治 外交 冲突 制裁"
-        ],
-        "twitter_queries": [
-          "geopolitics",
-          "world affairs",
-          "国际政治"
-        ],
-        "github_query": "",
-        "exclude": []
-      },
-      "display": {
-        "max_items": 6,
-        "style": "compact"
-      }
-    },
-    {
-      "id": "cybersecurity",
-      "emoji": "🔒",
-      "label": "Cybersecurity / 网络安全",
-      "description": "网络安全、漏洞披露、隐私保护、攻击事件与安全研究",
-      "search": {
-        "queries": [
-          "cybersecurity vulnerability breach",
-          "hacking incident privacy",
-          "security research CVE",
-          "网络安全 漏洞 数据泄露"
-        ],
-        "twitter_queries": [
-          "security",
-          "cybersecurity",
-          "黑客"
-        ],
-        "github_query": "",
-        "exclude": []
-      },
-      "display": {
-        "max_items": 5,
+        "max_items": 10,
         "style": "compact"
       }
     },
@@ -247,12 +66,12 @@
       "id": "github",
       "emoji": "📦",
       "label": "GitHub / 开源动态",
-      "description": "GitHub Releases、关键仓库更新、开源项目动态与 Trending 仓库",
+      "description": "GitHub Releases、Trending 与关键开源仓库动态。",
       "search": {
         "queries": [
-          "GitHub open source release",
+          "GitHub release open source project",
           "GitHub trending repositories",
-          "开源项目 更新"
+          "开源项目 GitHub 更新"
         ],
         "twitter_queries": [
           "GitHub release",
@@ -262,16 +81,145 @@
         "github_queries": [
           "llm large-language-model in:topics,name,description",
           "ai-agent autonomous-agent in:topics,name,description",
-          "machine-learning deep-learning in:topics,name,description",
-          "developer programming in:topics,name,description",
-          "finance trading in:topics,name,description",
+          "developer tools programming in:topics,name,description",
+          "robotics autonomous-driving in:topics,name,description",
+          "inference serving vector database in:topics,name,description",
           "security cybersecurity in:topics,name,description"
         ],
-        "github_query": "",
         "exclude": []
       },
       "display": {
-        "max_items": 6,
+        "max_items": 10,
+        "style": "compact"
+      }
+    },
+    {
+      "id": "technology",
+      "emoji": "🔬",
+      "label": "Technology / 科技",
+      "description": "未命中细分类的广义技术内容，包括开发工具、网络安全、平台产品、云与工程实践。",
+      "search": {
+        "queries": [
+          "developer tools software engineering platform technology",
+          "cybersecurity cloud infrastructure engineering product launch",
+          "programming framework security platform update",
+          "开发工具 网络安全 平台 软件工程 云"
+        ],
+        "twitter_queries": [
+          "developer tools",
+          "software engineering",
+          "security",
+          "platform"
+        ],
+        "exclude": [
+          "rumor",
+          "unverified"
+        ]
+      },
+      "display": {
+        "max_items": 10,
+        "style": "detailed"
+      }
+    },
+    {
+      "id": "business",
+      "emoji": "💼",
+      "label": "Business / 商业",
+      "description": "公司、市场、融资、并购、财报，以及宏观经济和政策对产业与资本市场的影响。",
+      "search": {
+        "queries": [
+          "business markets company earnings investment",
+          "macro economy regulation finance industry",
+          "merger acquisition startup funding stock market",
+          "商业 市场 财报 融资 宏观 监管"
+        ],
+        "twitter_queries": [
+          "markets",
+          "business",
+          "finance",
+          "investment"
+        ],
+        "exclude": []
+      },
+      "display": {
+        "max_items": 10,
+        "style": "compact"
+      }
+    },
+    {
+      "id": "world",
+      "emoji": "🌍",
+      "label": "World / 国际",
+      "description": "国际事务、外交、战争、制裁、地缘政治与全球供应链博弈。",
+      "search": {
+        "queries": [
+          "geopolitics diplomacy conflict sanctions",
+          "international relations war government election",
+          "global supply chain geopolitical risk",
+          "国际 外交 冲突 制裁 地缘"
+        ],
+        "twitter_queries": [
+          "geopolitics",
+          "world affairs",
+          "international relations"
+        ],
+        "exclude": []
+      },
+      "display": {
+        "max_items": 10,
+        "style": "compact"
+      }
+    },
+    {
+      "id": "science",
+      "emoji": "🧪",
+      "label": "Science / 科学",
+      "description": "基础研究、论文、实验室成果与工程突破。",
+      "search": {
+        "queries": [
+          "scientific research engineering breakthrough",
+          "paper laboratory discovery applied research",
+          "science innovation experiment results",
+          "科研 论文 实验室 工程 突破"
+        ],
+        "twitter_queries": [
+          "research",
+          "paper",
+          "science",
+          "breakthrough"
+        ],
+        "exclude": [
+          "rumor",
+          "opinion only"
+        ]
+      },
+      "display": {
+        "max_items": 10,
+        "style": "compact"
+      }
+    },
+    {
+      "id": "social",
+      "emoji": "🫂",
+      "label": "Social / 社会",
+      "description": "教育、工作方式、媒体传播、社会文化影响与公众舆论。",
+      "search": {
+        "queries": [
+          "education future of work media society",
+          "public opinion creator economy digital culture",
+          "technology social impact jobs education",
+          "教育 工作 媒体 社会 文化 影响"
+        ],
+        "twitter_queries": [
+          "future of work",
+          "education",
+          "media",
+          "social impact"
+        ],
+        "exclude": []
+      },
+      "display": {
+        "max_items": 10,
         "style": "compact"
       }
     }

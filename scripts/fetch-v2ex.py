@@ -24,6 +24,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set
 
+try:
+    from topic_utils import resolve_primary_topic
+except ImportError:
+    sys.path.append(str(Path(__file__).parent))
+    from topic_utils import resolve_primary_topic
+
 SOURCE_ID = "v2ex-api"
 SOURCE_NAME = "V2EX Hot"
 SOURCE_PRIORITY = 4
@@ -33,17 +39,17 @@ COOLDOWN_SECONDS = float(os.environ.get("BB_BROWSER_V2EX_COOLDOWN_SECONDS", "5.0
 _last_success_at: Optional[float] = None
 
 NODE_TOPIC_MAP = {
-    "programmer": {"developer-tools"},
-    "nodejs": {"developer-tools"},
-    "python": {"developer-tools"},
-    "java": {"developer-tools"},
-    "go": {"developer-tools"},
-    "rust": {"developer-tools"},
-    "career": {"developer-tools"},
-    "devops": {"developer-tools"},
-    "linux": {"developer-tools"},
-    "database": {"developer-tools"},
-    "server": {"developer-tools"},
+    "programmer": {"technology"},
+    "nodejs": {"technology"},
+    "python": {"technology"},
+    "java": {"technology"},
+    "go": {"technology"},
+    "rust": {"technology"},
+    "career": {"social"},
+    "devops": {"technology"},
+    "linux": {"technology"},
+    "database": {"technology"},
+    "server": {"technology"},
     "ev": {"technology"},
     "car": {"technology"},
     "apple": {"technology"},
@@ -52,18 +58,16 @@ NODE_TOPIC_MAP = {
     "ipad": {"technology"},
     "macos": {"technology"},
     "hardware": {"technology"},
-    "share": {"developer-tools"},
+    "share": {"technology"},
 }
 
 TOPIC_KEYWORDS = {
-    "ai-models": [
+    "ai-frontier": [
         "llm", "gpt", "claude", "gemini", "anthropic", "openai", "deepseek",
         "qwen", "kimi", "大模型", "语言模型", "模型", "prompt",
-    ],
-    "ai-agents": [
         "agent", "agents", "智能体", "copilot", "mcp", "automation", "agentic",
     ],
-    "ai-ecosystem": [
+    "ai-infra": [
         "ai chip", "gpu", "nvidia", "tesla", "spacex", "robotics", "humanoid",
         "芯片", "算力", "存储", "机器人", "特斯拉", "自动驾驶",
     ],
@@ -72,25 +76,19 @@ TOPIC_KEYWORDS = {
         "自动驾驶", "智驾", "iphone", "ipad", "macbook", "mac", "ios",
         "android", "tesla", "logitech", "罗技", "手机", "显卡", "耳机",
         "汽车", "电车",
-    ],
-    "developer-tools": [
         "python", "node", "nodejs", "nestjs", "fastify", "hono", "javascript",
         "typescript", "backend", "frontend", "api", "docker", "k8s",
         "编程", "程序员", "开发", "后端", "前端", "数据库", "运维",
-    ],
-    "markets-business": [
-        "finance", "stock", "stocks", "market", "fund", "房贷", "股票", "基金",
-        "理财", "财务", "经济",
-    ],
-    "macro-policy": [
-        "inflation", "rate cut", "rate hike", "cpi", "央行", "利率", "宏观",
-        "监管", "政策", "财政",
-    ],
-    "cybersecurity": [
         "security", "cve", "漏洞", "隐私", "渗透", "攻击", "数据泄露",
         "hacking", "breach",
     ],
-    "world-affairs": [
+    "business": [
+        "finance", "stock", "stocks", "market", "fund", "房贷", "股票", "基金",
+        "理财", "财务", "经济",
+        "inflation", "rate cut", "rate hike", "cpi", "央行", "利率", "宏观",
+        "监管", "政策", "财政",
+    ],
+    "world": [
         "war", "conflict", "sanction", "diplomacy", "election", "government",
         "国际", "外交", "冲突", "政治",
     ],
@@ -155,7 +153,7 @@ def truncate_summary(value: str, limit: int = 240) -> str:
     return text[: limit - 3].rstrip() + "..."
 
 
-def infer_topics(title: str, content: str, node_slug: str, node_name: str) -> List[str]:
+def infer_topic(title: str, content: str, node_slug: str, node_name: str) -> str:
     haystack = f"{title}\n{content}\n{node_slug}\n{node_name}".lower()
     topics: Set[str] = set(NODE_TOPIC_MAP.get(node_slug, set()))
 
@@ -163,18 +161,7 @@ def infer_topics(title: str, content: str, node_slug: str, node_name: str) -> Li
         if any(keyword.lower() in haystack for keyword in keywords):
             topics.add(topic_id)
 
-    ordered = [
-        "ai-models",
-        "ai-agents",
-        "ai-ecosystem",
-        "technology",
-        "developer-tools",
-        "markets-business",
-        "macro-policy",
-        "world-affairs",
-        "cybersecurity",
-    ]
-    return [topic_id for topic_id in ordered if topic_id in topics]
+    return resolve_primary_topic(list(topics))
 
 
 def transform_topic(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -186,8 +173,8 @@ def transform_topic(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     content = item.get("content", "") or ""
     node_slug = (item.get("nodeSlug") or "").strip().lower()
     node_name = clean_text(item.get("node", ""))
-    topics = infer_topics(title, content, node_slug, node_name)
-    if not topics:
+    topic = infer_topic(title, content, node_slug, node_name)
+    if not topic:
         return None
 
     created = item.get("created")
@@ -204,7 +191,7 @@ def transform_topic(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "link": link,
         "date": date_iso,
         "summary": summary,
-        "topics": topics,
+        "topic": topic,
         "replies": replies,
         "author": author,
         "node": node_name,
@@ -235,7 +222,7 @@ def fetch_v2ex_hot(logger: logging.Logger) -> Dict[str, Any]:
         "source_type": "v2ex",
         "name": SOURCE_NAME,
         "priority": SOURCE_PRIORITY,
-        "topics": sorted({topic for article in articles for topic in article.get("topics", [])}),
+        "topic": resolve_primary_topic([article.get("topic") for article in articles]),
         "status": "ok" if articles else "error",
         "items": len(articles),
         "count": len(articles),

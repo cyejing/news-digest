@@ -29,7 +29,7 @@ class TestFetchGithubTrending(unittest.TestCase):
         self.assertTrue(all(query["topic"] == "github" for query in queries))
         self.assertTrue(all(" OR " not in query["q"] for query in queries))
 
-    def test_load_queries_falls_back_to_single_legacy_query(self):
+    def test_load_queries_ignores_legacy_single_query(self):
         with patch.object(fetch_github_trending, "load_topics_config", return_value=[
             {
                 "id": "github",
@@ -39,7 +39,7 @@ class TestFetchGithubTrending(unittest.TestCase):
                 },
             },
             {
-                "id": "ai-models",
+                "id": "ai-frontier",
                 "search": {
                     "queries": [],
                     "github_query": "ignored query",
@@ -48,7 +48,7 @@ class TestFetchGithubTrending(unittest.TestCase):
         ]):
             queries = fetch_github_trending.load_github_trending_queries(DEFAULTS_DIR)
 
-        self.assertEqual(queries, [{"topic": "github", "q": "legacy github query"}])
+        self.assertEqual(queries, [])
 
     def test_trending_results_only_use_github_topic(self):
         payload = {
@@ -88,7 +88,7 @@ class TestFetchGithubTrending(unittest.TestCase):
 
         repos = result["repos"]
         self.assertEqual(len(repos), 1)
-        self.assertEqual(repos[0]["topics"], ["github"])
+        self.assertEqual(repos[0]["topic"], "github")
         self.assertEqual(result["queries_total"], 6)
         self.assertEqual(result["queries_ok"], 6)
 

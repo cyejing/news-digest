@@ -31,7 +31,7 @@ class TestFetchTwitter(unittest.TestCase):
                 "likes": 1,
                 "retweets": 2,
             },
-            {"topics": ["ai-models"]},
+            {"topic": "ai-frontier"},
             cutoff,
         )
         self.assertIsNone(article)
@@ -48,7 +48,7 @@ class TestFetchTwitter(unittest.TestCase):
                 "retweets": 2,
                 "replies": 3,
             },
-            {"topics": ["ai-models"]},
+            {"topic": "ai-frontier"},
             cutoff,
         )
         self.assertEqual(article["metrics"]["like_count"], 10)

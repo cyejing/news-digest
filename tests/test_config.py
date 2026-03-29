@@ -66,7 +66,7 @@ class TestLoadSources(unittest.TestCase):
                             "name": "Test RSS",
                             "enabled": True,
                             "priority": 3,
-                            "topics": ["ai-models"],
+                            "topic": "ai-frontier",
                             "url": "https://test.com/feed",
                         }
                     ]
@@ -117,7 +117,7 @@ class TestLoadSources(unittest.TestCase):
                             "handle": "example_handle",
                             "enabled": True,
                             "priority": first.get("priority", 3),
-                            "topics": first.get("topics", []),
+                            "topic": first.get("topic"),
                         }
                     ]
                 }
@@ -151,8 +151,8 @@ class TestLoadTopics(unittest.TestCase):
     def test_topic_ids(self):
         topics = load_merged_topics(DEFAULTS_DIR)
         ids = [topic["id"] for topic in topics]
-        self.assertIn("ai-models", ids)
-        self.assertIn("ai-agents", ids)
+        self.assertIn("ai-frontier", ids)
+        self.assertIn("ai-infra", ids)
         self.assertIn("technology", ids)
         self.assertIn("github", ids)
 
@@ -161,7 +161,7 @@ class TestLoadTopics(unittest.TestCase):
         github_sources = [source for source in sources if source["type"] == "github"]
         self.assertTrue(github_sources)
         for source in github_sources:
-            self.assertEqual(source.get("topics"), ["github"])
+            self.assertEqual(source.get("topic"), "github")
 
 
 class TestSourceCounts(unittest.TestCase):

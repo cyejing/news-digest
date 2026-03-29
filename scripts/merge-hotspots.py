@@ -44,6 +44,7 @@ def hotspot_item(article: Dict[str, Any], rank: int) -> Dict[str, Any]:
     link = article.get("link") or article.get("reddit_url") or article.get("external_url", "")
     return {
         "rank": rank,
+        "topic": article.get("topic", ""),
         "title": article.get("title", ""),
         "link": link,
         "score": round(article.get("final_score", article.get("quality_score", 0)), 1),

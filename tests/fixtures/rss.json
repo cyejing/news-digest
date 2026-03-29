@@ -15,10 +15,6 @@
       "name": "NVIDIA AI Blog",
       "url": "https://blogs.nvidia.com/feed/",
       "priority": 9,
-      "topics": [
-        "ai-ecosystem",
-        "technology"
-      ],
       "status": "ok",
       "attempts": 1,
       "count": 2,
@@ -27,21 +23,16 @@
           "title": "NVIDIA expands Blackwell deployments as AI infrastructure demand accelerates",
           "link": "https://blogs.nvidia.com/blog/blackwell-ai-infrastructure-demand/",
           "date": "2026-03-28T03:20:00+00:00",
-          "topics": [
-            "ai-ecosystem",
-            "technology"
-          ]
+          "topic": "ai-infra"
         },
         {
           "title": "Humanoid robotics teams adopt new simulation and GPU training workflows",
           "link": "https://blogs.nvidia.com/blog/humanoid-robotics-gpu-training/",
           "date": "2026-03-28T01:10:00+00:00",
-          "topics": [
-            "ai-ecosystem",
-            "technology"
-          ]
+          "topic": "ai-infra"
         }
-      ]
+      ],
+      "topic": "ai-infra"
     },
     {
       "source_id": "techcrunch-ai-rss",
@@ -49,11 +40,6 @@
       "name": "TechCrunch AI",
       "url": "https://techcrunch.com/category/artificial-intelligence/feed/",
       "priority": 7,
-      "topics": [
-        "ai-models",
-        "ai-agents",
-        "ai-ecosystem"
-      ],
       "status": "ok",
       "attempts": 1,
       "count": 2,
@@ -62,19 +48,16 @@
           "title": "Tesla supplier chain rides new optimism around humanoid robot production",
           "link": "https://techcrunch.com/2026/03/28/tesla-supplier-chain-humanoid-robots/",
           "date": "2026-03-28T02:35:00+00:00",
-          "topics": [
-            "ai-ecosystem"
-          ]
+          "topic": "ai-infra"
         },
         {
           "title": "AI chip makers and memory vendors rally as hyperscaler spending climbs",
           "link": "https://techcrunch.com/2026/03/28/ai-chip-memory-vendors-rally/",
           "date": "2026-03-28T00:55:00+00:00",
-          "topics": [
-            "ai-ecosystem"
-          ]
+          "topic": "ai-infra"
         }
-      ]
+      ],
+      "topic": "ai-infra"
     },
     {
       "source_id": "fed-monetary-policy-rss",
@@ -82,10 +65,6 @@
       "name": "Federal Reserve Monetary Policy",
       "url": "https://www.federalreserve.gov/feeds/press_monetary.xml",
       "priority": 9,
-      "topics": [
-        "markets-business",
-        "macro-policy"
-      ],
       "status": "ok",
       "attempts": 1,
       "count": 2,
@@ -94,21 +73,16 @@
           "title": "Federal Reserve holds rates steady and signals data-dependent path",
           "link": "https://www.federalreserve.gov/newsevents/pressreleases/monetary20260328a.htm",
           "date": "2026-03-28T03:00:00+00:00",
-          "topics": [
-            "markets-business",
-            "macro-policy"
-          ]
+          "topic": "business"
         },
         {
           "title": "Board releases updated economic projections for inflation and employment",
           "link": "https://www.federalreserve.gov/newsevents/pressreleases/monetary20260328b.htm",
           "date": "2026-03-28T02:45:00+00:00",
-          "topics": [
-            "markets-business",
-            "macro-policy"
-          ]
+          "topic": "business"
         }
-      ]
+      ],
+      "topic": "business"
     }
   ]
 }

@@ -3,7 +3,7 @@
 Fetch GitHub releases from unified sources configuration.
 
 Reads sources.json, filters GitHub sources, fetches releases sequentially with retry
-mechanism, and outputs structured JSON with releases tagged by topics.
+mechanism, and outputs structured JSON with releases tagged by a single topic.
 
 Usage:
     python3 fetch-github.py [--config CONFIG_DIR] [--hours 48] [--output FILE] [--verbose]
@@ -22,6 +22,18 @@ from urllib.request import urlopen, Request
 from urllib.error import HTTPError
 from pathlib import Path
 from typing import Dict, List, Any, Optional
+
+try:
+    from config_loader import load_merged_sources
+except ImportError:
+    sys.path.append(str(Path(__file__).parent))
+    from config_loader import load_merged_sources
+
+try:
+    from topic_utils import get_source_topic
+except ImportError:
+    sys.path.append(str(Path(__file__).parent))
+    from topic_utils import get_source_topic
 
 TIMEOUT = 60
 MAX_RELEASES_PER_REPO = 20
@@ -175,7 +187,7 @@ def fetch_releases_with_retry(source: Dict[str, Any], cutoff: datetime, github_t
     name = source["name"]
     repo = source["repo"]
     priority = normalize_priority(source.get("priority"))
-    topics = source["topics"]
+    topic = get_source_topic(source)
     
     repo_name = get_repo_name(repo)
     api_url = f"https://api.github.com/repos/{repo}/releases"
@@ -224,7 +236,7 @@ def fetch_releases_with_retry(source: Dict[str, Any], cutoff: datetime, github_t
                         "name": name,
                         "repo": repo,
                         "priority": priority,
-                        "topics": topics,
+                        "topic": topic,
                         "status": "ok",
                         "attempts": attempt + 1,
                         "not_modified": True,
@@ -259,7 +271,7 @@ def fetch_releases_with_retry(source: Dict[str, Any], cutoff: datetime, github_t
                         "link": link,
                         "date": pub_date.isoformat(),
                         "summary": summary,
-                        "topics": topics[:],
+                        "topic": topic,
                     })
             
             return {
@@ -268,7 +280,7 @@ def fetch_releases_with_retry(source: Dict[str, Any], cutoff: datetime, github_t
                 "name": name,
                 "repo": repo,
                 "priority": priority,
-                "topics": topics,
+                "topic": topic,
                 "status": "ok",
                 "attempts": attempt + 1,
                 "items": len(articles),
@@ -292,7 +304,7 @@ def fetch_releases_with_retry(source: Dict[str, Any], cutoff: datetime, github_t
                     "name": name,
                     "repo": repo,
                     "priority": priority,
-                    "topics": topics,
+                    "topic": topic,
                     "status": "error",
                     "attempts": attempt + 1,
                     "error": error_msg,
@@ -304,14 +316,6 @@ def fetch_releases_with_retry(source: Dict[str, Any], cutoff: datetime, github_t
 
 def load_sources(defaults_dir: Path, config_dir: Optional[Path] = None) -> List[Dict[str, Any]]:
     """Load GitHub sources from unified configuration with overlay support."""
-    try:
-        from config_loader import load_merged_sources
-    except ImportError:
-        # Fallback for relative import
-        import sys
-        sys.path.append(str(Path(__file__).parent))
-        from config_loader import load_merged_sources
-    
     # Load merged sources from defaults + optional user overlay
     all_sources = load_merged_sources(defaults_dir, config_dir)
     
