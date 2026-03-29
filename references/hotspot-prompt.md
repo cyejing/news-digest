@@ -58,13 +58,14 @@ uv run <SKILL_DIR>/scripts/run-pipeline.py \
 
 ## 用户输出约束
 
-- 最终输出必须使用 `<LANGUAGE>` 语言
-- 输出必须基于归档 Markdown 正文
+- 最终输出必须使用 `<LANGUAGE>` 语言；不要保留英文正文作为最终交付
+- 输出必须基于归档 Markdown 正文，先做等量翻译，再按原 Markdown 结构输出
+- 翻译时只能转换语言，不能做摘要、精选、删减、改写结构或合并条目
 - 每个 topic 不能减少
 - 每个 topic 下的 item 不能减少
 - Markdown 结构、标题层级、列表结构、链接格式不能变
-- `daily` 模式下，不允许新增任何内容，必须完整输出归档 Markdown 原文
-- `weekly` 模式下，必须完整保留归档 Markdown 正文，只允许在文末追加 `<EXTRA_SECTIONS>`
+- `daily` 模式下，必须把归档 Markdown 的全部文字内容完整翻译成 `<LANGUAGE>`；除语言转换外，不允许新增、删除或改写内容
+- `weekly` 模式下，必须先把归档 Markdown 正文完整翻译成 `<LANGUAGE>`，正文部分除语言转换外不能改动；只允许在文末追加 `<EXTRA_SECTIONS>`
 - `weekly` 模式下，`<EXTRA_SECTIONS>` 必须基于历史记录生成“每周趋势总结”，概括本周热点变化、重复主题和来源趋势
 - 如果平台单条消息长度受限，可以分段连续输出，但不能省略任何 topic 或 item
 
@@ -96,6 +97,6 @@ uv run <SKILL_DIR>/scripts/merge-hotspots.py \
 ```
 
 - 如果恢复后已有完整归档 Markdown：
-    - `daily` 直接输出归档 Markdown 原文
-    - `weekly` 保留归档 Markdown 正文，并在文末追加 `<EXTRA_SECTIONS>`
+    - `daily` 把归档 Markdown 的全部文字内容完整翻译成 `<LANGUAGE>` 后输出
+    - `weekly` 先把归档 Markdown 正文完整翻译成 `<LANGUAGE>`，再在文末追加 `<EXTRA_SECTIONS>`
 - 如果恢复后仍没有完整 Markdown，只能向用户报告实际完成情况和未完成步骤，不能伪造完整热点结果
