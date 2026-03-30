@@ -48,6 +48,7 @@ files:
 ## 主会话交付约束
 
 - 最终面向用户输出时，必须严格使用 `<LANGUAGE>`；如果归档 Markdown 中存在英文内容，先做等量翻译，再按原 Markdown 结构输出
+- 最终输出除正文等量翻译外，必须在结尾追加 AI 总结段落；日报和周报都适用，具体规则统一以 `references/hotspot-prompt.md` 为准
 
 ## 快速路由
 

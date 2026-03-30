@@ -16,7 +16,6 @@
 |--------------------|--------------|-----------|
 | `<MODE>`           | `daily`      | `weekly`  |
 | `<RSS_HOURS>`      | `48`         | `168`     |
-| `<EXTRA_SECTIONS>` | *(无)*        | `📊 每周趋势总结` |
 | `<WORKSPACE>`      | 工作区路径        | 工作区路径     |
 | `<SKILL_DIR>`      | skill 安装路径   | skill 安装路径 |
 | `<DATE>`           | `YYYY-MM-DD` | `YYYY-MM-DD` |
@@ -69,9 +68,9 @@ uv run <SKILL_DIR>/scripts/run-pipeline.py \
 - 每个 topic 不能减少
 - 每个 topic 下的 item 不能减少
 - Markdown 结构、标题层级、列表结构、链接格式不能变
-- `daily` 模式下，必须把归档 Markdown 的全部文字内容完整翻译成 `<LANGUAGE>`；除语言转换外，不允许新增、删除或改写内容
-- `weekly` 模式下，必须先把归档 Markdown 正文完整翻译成 `<LANGUAGE>`，正文部分除语言转换外不能改动；只允许在文末追加 `<EXTRA_SECTIONS>`
-- `weekly` 模式下，`<EXTRA_SECTIONS>` 必须基于历史记录生成“每周趋势总结”，概括本周热点变化、重复主题和来源趋势
+- 每条 item 中，已有来源信息时必须保留 `来源：...`；已有指标信息时必须保留 `指标：...`；如果原始归档确实没有对应值，可以省略该字段，但不能伪造来源或指标
+- `daily` 模式下，必须把归档 Markdown 的全部文字内容完整翻译成 `<LANGUAGE>`；除语言转换外，不允许新增、删除或改写正文内容；完成正文输出后，必须在文末追加标题为 `## 本日报告总结` 的 AI 总结段落，概括当天热点归纳、主要主题和信号变化
+- `weekly` 模式下，必须先把归档 Markdown 正文完整翻译成 `<LANGUAGE>`；正文部分除语言转换外不能改动；完成正文输出后，必须在文末追加标题为 `## 本周报告总结` 的 AI 总结段落；该总结必须基于已生成的归档 Markdown 正文内容和历史记录，概括本周热点变化、重复主题和来源趋势
 - 如果平台单条消息长度受限，可以分段连续输出，但不能省略任何 topic 或 item
 
 ## 主会话成功条件
@@ -107,6 +106,5 @@ uv run <SKILL_DIR>/scripts/merge-hotspots.py \
 ```
 
 - 如果恢复后已有完整归档 Markdown：
-    - `daily` 把归档 Markdown 的全部文字内容完整翻译成 `<LANGUAGE>` 后输出
-    - `weekly` 先把归档 Markdown 正文完整翻译成 `<LANGUAGE>`，再在文末追加 `<EXTRA_SECTIONS>`
+    - 按上面的主会话输出约束完成最终输出即可
 - 如果恢复后仍没有完整 Markdown，只能向用户报告实际完成情况和未完成步骤，不能伪造完整热点结果
