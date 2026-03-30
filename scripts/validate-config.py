@@ -229,6 +229,31 @@ def validate_topic_rules_consistency(topic_rules: Dict[str, Any], topics_data: D
     return True
 
 
+def validate_topic_search_fields(topics_data: Dict[str, Any]) -> bool:
+    """Validate topic-level search query fields."""
+    errors = []
+    for topic in topics_data.get("topics", []):
+        if not isinstance(topic, dict):
+            continue
+        topic_id = topic.get("id", "unknown")
+        search = topic.get("search", {})
+        if not isinstance(search, dict):
+            errors.append(f"Topic '{topic_id}' has invalid search block")
+            continue
+        for key in ("google_queries", "twitter_queries", "reddit_queries", "github_queries", "exclude"):
+            if key in search and not isinstance(search.get(key), list):
+                errors.append(f"Topic '{topic_id}' search.{key} must be an array")
+
+    if errors:
+        logging.error("❌ Topic search-field validation failed:")
+        for error in errors:
+            logging.error(f"   {error}")
+        return False
+
+    logging.info("✅ Topic search-field validation passed")
+    return True
+
+
 def validate_api_sources_consistency(api_sources: Dict[str, Any], topics_data: Dict[str, Any]) -> bool:
     """Validate API source topic references against the topic taxonomy."""
     valid_topics = {topic["id"] for topic in topics_data["topics"]}
@@ -271,8 +296,10 @@ def validate_source_types(sources_data: Dict[str, Any]) -> bool:
             if not source.get("url"):
                 errors.append(f"RSS source '{source_id}' missing required 'url' field")
         elif source_type == "twitter":
-            if not source.get("handle"):
-                errors.append(f"Twitter source '{source_id}' missing required 'handle' field")
+            if not source.get("handle") and not source.get("query") and not source.get("search_query"):
+                errors.append(
+                    f"Twitter source '{source_id}' missing required 'handle' or 'query/search_query' field"
+                )
         elif source_type == "github":
             if not source.get("repo"):
                 errors.append(f"GitHub source '{source_id}' missing required 'repo' field")
@@ -375,6 +402,7 @@ def main():
         # Consistency validation
         all_valid &= validate_sources_consistency(sources_data, topics_data, merged_topic_rules)
         all_valid &= validate_topic_rules_consistency(merged_topic_rules, topics_data)
+        all_valid &= validate_topic_search_fields(topics_data)
         all_valid &= validate_api_sources_consistency(merged_api_sources, topics_data)
         
         # Source type validation  

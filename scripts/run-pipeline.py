@@ -35,6 +35,9 @@ STEP_COOLDOWN_DEFAULTS = {
     "fetch-reddit.py": ("BB_BROWSER_REDDIT_COOLDOWN_SECONDS", 8.0),
     "fetch-google.py": ("BB_BROWSER_GOOGLE_COOLDOWN_SECONDS", 10.0),
     "fetch-v2ex.py": ("BB_BROWSER_V2EX_COOLDOWN_SECONDS", 8.0),
+    "fetch-zhihu.py": ("BB_BROWSER_ZHIHU_COOLDOWN_SECONDS", 8.0),
+    "fetch-weibo.py": ("BB_BROWSER_WEIBO_COOLDOWN_SECONDS", 8.0),
+    "fetch-toutiao.py": ("BB_BROWSER_TOUTIAO_COOLDOWN_SECONDS", 8.0),
     "fetch-github.py": ("NEWS_HOTSPOTS_GITHUB_COOLDOWN_SECONDS", 6.0),
     "fetch-github-trending.py": ("NEWS_HOTSPOTS_GITHUB_TRENDING_COOLDOWN_SECONDS", 6.0),
 }
@@ -712,6 +715,9 @@ def build_fetch_steps(
         ),
         StepSpec("api", "API Sources", "fetch-api.py", common + verbose_flag, debug_dir / "api.json", None),
         StepSpec("v2ex", "V2EX Hot", "fetch-v2ex.py", common + verbose_flag, debug_dir / "v2ex.json", get_cooldown_for_script("fetch-v2ex.py")),
+        StepSpec("zhihu", "Zhihu Hot", "fetch-zhihu.py", common + verbose_flag, debug_dir / "zhihu.json", get_cooldown_for_script("fetch-zhihu.py")),
+        StepSpec("weibo", "Weibo Hot", "fetch-weibo.py", common + verbose_flag, debug_dir / "weibo.json", get_cooldown_for_script("fetch-weibo.py")),
+        StepSpec("toutiao", "Toutiao Hot", "fetch-toutiao.py", common + verbose_flag, debug_dir / "toutiao.json", get_cooldown_for_script("fetch-toutiao.py")),
         StepSpec("reddit", "Reddit", "fetch-reddit.py", common + verbose_flag, debug_dir / "reddit.json", get_cooldown_for_script("fetch-reddit.py")),
     ]
 
@@ -804,6 +810,9 @@ def build_merge_args(debug_dir: Path, archive_dir: Optional[Path], verbose: bool
         ("--trending", debug_dir / "trending.json"),
         ("--api", debug_dir / "api.json"),
         ("--v2ex", debug_dir / "v2ex.json"),
+        ("--zhihu", debug_dir / "zhihu.json"),
+        ("--weibo", debug_dir / "weibo.json"),
+        ("--toutiao", debug_dir / "toutiao.json"),
         ("--reddit", debug_dir / "reddit.json"),
     ]:
         if path.exists():

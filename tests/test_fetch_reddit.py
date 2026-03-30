@@ -74,6 +74,53 @@ class TestFetchReddit(unittest.TestCase):
 
         run_mock.assert_called_once_with(["reddit/hot", "OpenAI", "5"])
 
+    def test_fetch_topic_uses_reddit_queries(self):
+        topic = {
+            "id": "ai-frontier",
+            "search": {
+                "reddit_queries": ["OpenAI", "Anthropic"],
+                "exclude": ["tutorial"],
+            },
+            "display": {"max_items": 2},
+        }
+        payload = {
+            "items": [
+                {
+                    "title": "OpenAI ships something",
+                    "url": "https://example.com/article",
+                    "permalink": "/r/OpenAI/comments/abc/openai_ships_something/",
+                    "created_utc": 1774577508,
+                    "score": 80,
+                    "num_comments": 12,
+                    "selftext": "summary",
+                }
+            ]
+        }
+        with patch.object(fetch_reddit, "run_bb_browser_site", return_value=payload) as run_mock:
+            result = fetch_reddit.fetch_topic(topic, hours=48, logger=fetch_reddit.logging.getLogger("test"))
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["count"], 1)
+        run_mock.assert_any_call(["reddit/search", 'OpenAI -tutorial', "--sort", "top", "--time", "week", "2"])
+
+    def test_parse_post_accepts_topic_id_string(self):
+        article = fetch_reddit.parse_post(
+            {
+                "title": "OpenAI ships something",
+                "url": "https://example.com/article",
+                "permalink": "/r/OpenAI/comments/abc/openai_ships_something/",
+                "created_utc": 1774577508,
+                "score": 80,
+                "num_comments": 12,
+                "selftext": "summary",
+            },
+            "ai-frontier",
+            50,
+            "OpenAI",
+        )
+        self.assertEqual(article["topic"], "ai-frontier")
+        self.assertEqual(article["reddit_query"], "OpenAI")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2,11 +2,8 @@
 """
 Fetch Reddit posts via bb-browser site adapters.
 
-Supports two source modes from sources.json:
-- hot mode: subreddit-based sources use `bb-browser site reddit/hot`
-- search mode: sources with `query` or `search_query` use `bb-browser site reddit/search`
-
-All Reddit fetches run sequentially. Search mode never uses concurrency.
+Reads source-mode entries from sources.json and topic query lists from
+topics.json. Both modes run sequentially in one step and share one cooldown.
 """
 
 import argparse
@@ -22,10 +19,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 try:
-    from config_loader import load_merged_sources
+    from config_loader import load_merged_sources, load_merged_topics
 except ImportError:
     sys.path.append(str(Path(__file__).parent))
-    from config_loader import load_merged_sources
+    from config_loader import load_merged_sources, load_merged_topics
 
 try:
     from topic_utils import get_source_topic
@@ -35,6 +32,8 @@ except ImportError:
 
 COOLDOWN_SECONDS = float(os.environ.get("BB_BROWSER_REDDIT_COOLDOWN_SECONDS", "6.0"))
 DEFAULT_TIMEOUT = 180
+DEFAULT_RESULTS_PER_QUERY = 5
+MAX_RESULTS_PER_QUERY = 20
 _last_success_at: Optional[float] = None
 
 
@@ -83,10 +82,7 @@ def run_bb_browser_site(args: Sequence[str], timeout: int = DEFAULT_TIMEOUT) -> 
 
 def load_sources(defaults_dir: Path, config_dir: Optional[Path] = None) -> List[Dict[str, Any]]:
     all_sources = load_merged_sources(defaults_dir, config_dir)
-    return [
-        source for source in all_sources
-        if source.get("type") == "reddit" and source.get("enabled", True)
-    ]
+    return [source for source in all_sources if source.get("type") == "reddit" and source.get("enabled", True)]
 
 
 def source_mode(source: Dict[str, Any]) -> str:
@@ -107,6 +103,15 @@ def hours_to_reddit_time(hours: int) -> str:
     return "all"
 
 
+def result_count_for_topic(topic: Dict[str, Any]) -> int:
+    display = topic.get("display", {})
+    max_items = display.get("max_items", DEFAULT_RESULTS_PER_QUERY)
+    try:
+        return max(1, min(MAX_RESULTS_PER_QUERY, int(max_items)))
+    except (TypeError, ValueError):
+        return DEFAULT_RESULTS_PER_QUERY
+
+
 def extract_posts(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     if isinstance(payload, list):
         return payload
@@ -122,7 +127,20 @@ def extract_posts(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     return []
 
 
-def parse_post(item: Dict[str, Any], source: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def parse_post(
+    item: Dict[str, Any],
+    topic_or_source: Any,
+    min_score: int = 0,
+    query: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    if isinstance(topic_or_source, dict):
+        topic_id = get_source_topic(topic_or_source)
+        min_score = int(topic_or_source.get("min_score", min_score) or 0)
+        if query is None:
+            query = topic_or_source.get("query") or topic_or_source.get("search_query")
+    else:
+        topic_id = str(topic_or_source or "")
+
     data = item.get("data") if isinstance(item.get("data"), dict) else item
     title = (data.get("title") or "").strip()
     if not title:
@@ -150,18 +168,15 @@ def parse_post(item: Dict[str, Any], source: Dict[str, Any]) -> Optional[Dict[st
         date_iso = datetime.fromtimestamp(created, tz=timezone.utc).isoformat()
 
     score = int(data.get("score", 0) or 0)
-    num_comments = int(
-        data.get("num_comments", data.get("comments", data.get("comment_count", 0))) or 0
-    )
-    min_score = int(source.get("min_score", 0) or 0)
-    if score < min_score:
+    num_comments = int(data.get("num_comments", data.get("comments", data.get("comment_count", 0))) or 0)
+    if score < int(min_score or 0):
         return None
 
     flair = data.get("link_flair_text") or data.get("flair")
     is_self = bool(data.get("is_self", False))
     summary = (data.get("selftext") or data.get("text") or data.get("snippet") or "").strip()
 
-    return {
+    article = {
         "title": title,
         "link": link,
         "reddit_url": reddit_url,
@@ -172,13 +187,16 @@ def parse_post(item: Dict[str, Any], source: Dict[str, Any]) -> Optional[Dict[st
         "flair": flair,
         "is_self": is_self,
         "summary": summary[:400],
-        "topic": get_source_topic(source),
+        "topic": topic_id,
         "metrics": {
             "score": score,
             "num_comments": num_comments,
             "upvote_ratio": data.get("upvote_ratio"),
         },
     }
+    if query:
+        article["reddit_query"] = query
+    return article
 
 
 def fetch_hot_source(source: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -212,14 +230,10 @@ def fetch_search_source(source: Dict[str, Any], hours: int) -> List[Dict[str, An
 def fetch_source(source: Dict[str, Any], hours: int) -> Dict[str, Any]:
     mode = source_mode(source)
     try:
-        if mode == "search":
-            raw_posts = fetch_search_source(source, hours)
-        else:
-            raw_posts = fetch_hot_source(source)
-
+        raw_posts = fetch_search_source(source, hours) if mode == "search" else fetch_hot_source(source)
         articles = []
         for item in raw_posts:
-            article = parse_post(item, source)
+            article = parse_post(item, get_source_topic(source), int(source.get("min_score", 0) or 0), source.get("query") or source.get("search_query"))
             if article:
                 articles.append(article)
 
@@ -258,9 +272,52 @@ def fetch_source(source: Dict[str, Any], hours: int) -> Dict[str, Any]:
             "articles": [],
         }
 
+
+def fetch_topic(topic: Dict[str, Any], hours: int, logger: logging.Logger) -> Dict[str, Any]:
+    search = topic.get("search", {})
+    queries = search.get("reddit_queries", [])
+    exclude = search.get("exclude", [])
+    per_query = result_count_for_topic(topic)
+    time_filter = hours_to_reddit_time(hours)
+
+    query_stats = []
+    dedup_by_url: Dict[str, Dict[str, Any]] = {}
+
+    for query in queries:
+        compiled_query = " ".join([query] + [f'-"{term}"' if " " in term else f"-{term}" for term in exclude if str(term).strip()])
+        try:
+            payload = run_bb_browser_site(["reddit/search", compiled_query, "--sort", "top", "--time", time_filter, str(per_query)])
+            posts = extract_posts(payload)
+            kept = 0
+            for item in posts:
+                article = parse_post(item, topic.get("id"), 0, compiled_query)
+                if not article:
+                    continue
+                dedup_by_url.setdefault(article["link"], article)
+                kept += 1
+            query_stats.append({"query": compiled_query, "status": "ok", "count": kept})
+        except Exception as exc:
+            logger.warning("Reddit query failed [%s]: %s", topic.get("id"), exc)
+            query_stats.append({"query": compiled_query, "status": "error", "count": 0, "error": str(exc)[:200]})
+
+    articles = list(dedup_by_url.values())
+    articles.sort(key=lambda article: article.get("score", 0), reverse=True)
+    ok_queries = sum(1 for stat in query_stats if stat["status"] == "ok")
+    return {
+        "topic_id": topic.get("id"),
+        "status": "ok" if articles else "error",
+        "queries_executed": len(queries),
+        "queries_ok": ok_queries,
+        "query_stats": query_stats,
+        "items": len(articles),
+        "count": len(articles),
+        "articles": articles,
+    }
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Sequential Reddit fetcher via bb-browser site adapters.",
+        description="Sequential Reddit fetcher via source mode and topic queries.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -279,7 +336,6 @@ Examples:
 
 def main() -> int:
     args = parse_args()
-
     logger = setup_logging(args.verbose)
     if not args.output:
         fd, temp_path = tempfile.mkstemp(prefix="news-hotspots-reddit-", suffix=".json")
@@ -288,19 +344,31 @@ def main() -> int:
 
     try:
         sources = load_sources(args.defaults, args.config)
-        logger.info("Fetching %d Reddit sources sequentially", len(sources))
+        topics = load_merged_topics(args.defaults, args.config)
+        logger.info("Fetching %d Reddit sources and %d topic query groups sequentially", len(sources), len(topics))
         logger.info("Reddit bb-browser cooldown: %.1fs", COOLDOWN_SECONDS)
-        results = []
-        for source in sources:
-            result = fetch_source(source, args.hours)
-            results.append(result)
+
+        source_results = [fetch_source(source, args.hours) for source in sources]
+        for result in source_results:
             if result["status"] == "ok":
                 logger.info("✅ %s: %d posts", result["name"], result["count"])
             else:
                 logger.warning("❌ %s: %s", result["name"], result.get("error"))
 
-        ok_count = sum(1 for result in results if result["status"] == "ok")
-        total_posts = sum(result.get("count", 0) for result in results)
+        topic_results = [fetch_topic(topic, args.hours, logger) for topic in topics if topic.get("search", {}).get("reddit_queries")]
+        ok_sources = sum(1 for result in source_results if result["status"] == "ok")
+        ok_topics = sum(1 for result in topic_results if result["status"] == "ok")
+        total_query_calls = sum(len(result.get("query_stats", [])) for result in topic_results)
+        ok_query_calls = sum(
+            1
+            for result in topic_results
+            for stat in result.get("query_stats", [])
+            if isinstance(stat, dict) and stat.get("status") == "ok"
+        )
+        total_posts = sum(result.get("count", 0) for result in source_results) + sum(result.get("count", 0) for result in topic_results)
+        total_calls = len(source_results) + total_query_calls
+        ok_calls = ok_sources + ok_query_calls
+
         output = {
             "generated": datetime.now(timezone.utc).isoformat(),
             "source_type": "reddit",
@@ -309,23 +377,37 @@ def main() -> int:
             "defaults_dir": str(args.defaults),
             "config_dir": str(args.config) if args.config else None,
             "hours": args.hours,
-            "calls_total": len(results),
-            "calls_ok": ok_count,
+            "calls_total": total_calls,
+            "calls_ok": ok_calls,
+            "calls_kind": "mixed",
             "items_total": total_posts,
-            "sources_total": len(results),
-            "sources_ok": ok_count,
+            "sources_total": len(source_results),
+            "sources_ok": ok_sources,
+            "topics_total": len(topic_results),
+            "topics_ok": ok_topics,
+            "queries_total": total_query_calls,
+            "queries_ok": ok_query_calls,
             "total_articles": total_posts,
-            "sources": results,
-            "subreddits_total": len(results),
-            "subreddits_ok": ok_count,
             "total_posts": total_posts,
-            "subreddits": results,
+            "sources": source_results,
+            "topics": topic_results,
+            "subreddits_total": len(source_results),
+            "subreddits_ok": ok_sources,
+            "subreddits": source_results,
         }
         with open(args.output, "w", encoding="utf-8") as handle:
             json.dump(output, handle, ensure_ascii=False, indent=2)
 
-        logger.info("✅ Done: %d/%d sources ok, %d posts → %s", ok_count, len(results), total_posts, args.output)
-        return 0 if ok_count == len(results) else 1
+        logger.info(
+            "✅ Done: %d/%d sources ok, %d/%d query groups ok, %d posts → %s",
+            ok_sources,
+            len(source_results),
+            ok_topics,
+            len(topic_results),
+            total_posts,
+            args.output,
+        )
+        return 0 if ok_sources == len(source_results) and ok_topics == len(topic_results) else 1
     except Exception as exc:
         logger.error("💥 Reddit fetch failed: %s", exc)
         return 1

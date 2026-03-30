@@ -34,7 +34,7 @@ files:
 ## 适用场景
 
 - 用户请求生成今日热点或本周热点
-- 用户请求查看当前运行情况或最近历史诊断
+- 用户请求查看抓取健康情况或最近历史诊断
 - 用户请求创建每日 / 每周热点自动化任务
 
 ## 执行代理约束
@@ -54,6 +54,54 @@ files:
 - 生成热点任务：读取 `references/hotspot-prompt.md`
 - 创建自动化任务：读取 `references/automation-template.md`
 - 查看健康诊断：运行 `source-health.py`
+- 当天换一批新闻：直接再次执行 `merge-hotspots.py`
+
+## 常用命令
+
+### 当天换一批新闻
+
+当同一天内用户想看“新一批还没看过的新闻”时，不需要重跑抓取；直接再次执行 `merge-hotspots.py` 即可。
+
+```bash
+uv run <SKILL_DIR>/scripts/merge-hotspots.py \
+  --input <WORKSPACE>/.../debug/merge-sources.json \
+  --archive <WORKSPACE>/archive/news-hotspots \
+  --debug <WORKSPACE>/.../debug \
+  --mode daily
+```
+
+行为约定：
+
+- `merge-hotspots.py` 会重新读取当前 `merge-sources.json` 的全量候选池
+- 它会自动读取当天 `<WORKSPACE>/archive/news-hotspots/<DATE>/json/` 下已有的 `daily*.json`
+- 已经出现在当天 `daily*.json` 里的条目会被视为“用户已经看过”，不会再次进入新一批结果
+- 新结果会继续归档为新的 `daily*.json` / `daily*.md`，例如 `daily.json`、`daily1.json`、`daily2.json`
+- 同时会把本次使用的候选池归档到当天 `json/` 目录下的 `merge-sources.json`、`merge-sources1.json` 等文件
+
+### 查看当前运行诊断
+
+当你已经拿到某一天的 `meta/` 目录路径时，直接读取该目录：
+
+```bash
+uv run <SKILL_DIR>/scripts/source-health.py \
+  --input <WORKSPACE>/archive/news-hotspots/<DATE>/meta \
+  --verbose
+```
+
+### 查看最近 7 天历史诊断
+
+如果把 `--input` 指向归档根目录，`source-health.py` 会自动聚合最近 7 天 `<DATE>/meta/` 下的元数据：
+
+```bash
+uv run <SKILL_DIR>/scripts/source-health.py \
+  --input <WORKSPACE>/archive/news-hotspots \
+  --verbose
+```
+
+输出结构固定为两段：
+
+- `History report`
+- `Run details`
 
 ## 必需路径
 

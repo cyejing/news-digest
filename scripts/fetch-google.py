@@ -106,7 +106,7 @@ def build_google_query(base_query: str, exclude: List[str]) -> str:
 
 def fetch_topic(topic: Dict[str, Any], logger: logging.Logger) -> Dict[str, Any]:
     search = topic.get("search", {})
-    queries = search.get("queries", [])
+    queries = search.get("google_queries", [])
     exclude = search.get("exclude", [])
     per_query = result_count_for_topic(topic)
 
@@ -187,7 +187,7 @@ def main() -> int:
         topics = load_merged_topics(args.defaults, args.config)
         logger.info("Fetching Google News for %d topics sequentially", len(topics))
         logger.info("Google bb-browser cooldown: %.1fs", COOLDOWN_SECONDS)
-        topic_results = [fetch_topic(topic, logger) for topic in topics if topic.get("search", {}).get("queries")]
+        topic_results = [fetch_topic(topic, logger) for topic in topics if topic.get("search", {}).get("google_queries")]
         ok_topics = sum(1 for result in topic_results if result["status"] == "ok")
         total_articles = sum(result.get("count", 0) for result in topic_results)
         total_queries = sum(len(result.get("query_stats", [])) for result in topic_results)

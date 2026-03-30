@@ -15,7 +15,7 @@
       "name": "Wall Street CN",
       "enabled": true,
       "topic": "business",
-      "priority": 4
+      "priority": 3
     },
     {
       "id": "tencent-api",
@@ -29,7 +29,7 @@
       "name": "Hacker News API",
       "enabled": true,
       "topic": "technology",
-      "priority": 4
+      "priority": 3
     }
   ]
 }

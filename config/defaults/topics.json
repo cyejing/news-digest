@@ -29,18 +29,20 @@
         ]
       },
       "search": {
-        "queries": [
+        "google_queries": [
           "foundation model release",
           "LLM update AI agents copilot",
-          "AI application launch agentic workflow",
+          "AI application agentic workflow",
           "大模型 智能体 AI 应用 发布"
         ],
         "twitter_queries": [
-          "GPT",
-          "Claude",
-          "Gemini",
-          "AI agent",
-          "智能体"
+        ],
+        "reddit_queries": [
+          "OpenAI",
+          "Anthropic",
+          "ChatGPT",
+          "AI agents",
+          "大模型"
         ],
         "exclude": [
           "tutorial",
@@ -79,17 +81,19 @@
         ]
       },
       "search": {
-        "queries": [
+        "google_queries": [
           "AI infrastructure GPU datacenter power memory",
           "semiconductor compute robotics autonomous driving",
-          "Tesla SpaceX robotics server cluster",
+          "Tesla Robotaxi SpaceX robotics \"Elon Musk\" datacenter",
           "AI 芯片 算力 电力 机器人 智驾 SpaceX"
         ],
         "twitter_queries": [
-          "GPU",
-          "robotics",
+        ],
+        "reddit_queries": [
           "Tesla",
           "SpaceX",
+          "GPU",
+          "robotics",
           "datacenter"
         ],
         "exclude": [
@@ -127,23 +131,25 @@
         ]
       },
       "search": {
-        "queries": [
+        "google_queries": [
           "GitHub release open source project",
           "GitHub trending repositories",
           "开源项目 GitHub 更新"
         ],
         "twitter_queries": [
-          "GitHub release",
+        ],
+        "reddit_queries": [
           "open source",
-          "开源更新"
+          "GitHub release",
+          "developer tools",
+          "programming"
         ],
         "github_queries": [
           "llm large-language-model in:topics,name,description",
           "ai-agent autonomous-agent in:topics,name,description",
           "developer tools programming in:topics,name,description",
           "robotics autonomous-driving in:topics,name,description",
-          "inference serving vector database in:topics,name,description",
-          "security cybersecurity in:topics,name,description"
+          "inference serving vector database in:topics,name,description"
         ],
         "exclude": []
       },
@@ -178,17 +184,18 @@
         ]
       },
       "search": {
-        "queries": [
+        "google_queries": [
           "developer tools software engineering platform technology",
           "cybersecurity cloud infrastructure engineering product launch",
           "programming framework security platform update",
           "开发工具 网络安全 平台 软件工程 云"
         ],
         "twitter_queries": [
-          "developer tools",
+        ],
+        "reddit_queries": [
           "software engineering",
-          "security",
-          "platform"
+          "cybersecurity",
+          "programming"
         ],
         "exclude": [
           "rumor",
@@ -225,17 +232,19 @@
         ]
       },
       "search": {
-        "queries": [
+        "google_queries": [
           "business markets company earnings investment",
           "macro economy regulation finance industry",
           "merger acquisition startup funding stock market",
           "商业 市场 财报 融资 宏观 监管"
         ],
         "twitter_queries": [
+        ],
+        "reddit_queries": [
           "markets",
           "business",
           "finance",
-          "investment"
+          "startup funding"
         ],
         "exclude": []
       },
@@ -269,16 +278,19 @@
         ]
       },
       "search": {
-        "queries": [
+        "google_queries": [
           "geopolitics diplomacy conflict sanctions",
           "international relations war government election",
           "global supply chain geopolitical risk",
           "国际 外交 冲突 制裁 地缘"
         ],
         "twitter_queries": [
+        ],
+        "reddit_queries": [
           "geopolitics",
-          "world affairs",
-          "international relations"
+          "international relations",
+          "war",
+          "sanctions"
         ],
         "exclude": []
       },
@@ -311,17 +323,19 @@
         ]
       },
       "search": {
-        "queries": [
+        "google_queries": [
           "scientific research engineering breakthrough",
           "paper laboratory discovery applied research",
           "science innovation experiment results",
           "科研 论文 实验室 工程 突破"
         ],
         "twitter_queries": [
+        ],
+        "reddit_queries": [
           "research",
-          "paper",
           "science",
-          "breakthrough"
+          "paper",
+          "laboratory"
         ],
         "exclude": [
           "rumor",
@@ -357,17 +371,19 @@
         ]
       },
       "search": {
-        "queries": [
+        "google_queries": [
           "education future of work media society",
           "public opinion creator economy digital culture",
           "technology social impact jobs education",
           "教育 工作 媒体 社会 文化 影响"
         ],
         "twitter_queries": [
+        ],
+        "reddit_queries": [
           "future of work",
           "education",
-          "media",
-          "social impact"
+          "social impact",
+          "media"
         ],
         "exclude": []
       },

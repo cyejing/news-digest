@@ -18,6 +18,9 @@ API_JSON="$DEBUG_DIR/api.json"
 TWITTER_JSON="$DEBUG_DIR/twitter.json"
 REDDIT_JSON="$DEBUG_DIR/reddit.json"
 V2EX_JSON="$DEBUG_DIR/v2ex.json"
+ZHIHU_JSON="$DEBUG_DIR/zhihu.json"
+WEIBO_JSON="$DEBUG_DIR/weibo.json"
+TOUTIAO_JSON="$DEBUG_DIR/toutiao.json"
 GOOGLE_JSON="$DEBUG_DIR/google.json"
 
 HOURS=48
@@ -37,6 +40,9 @@ fetch_step_script() {
     twitter) echo "$SCRIPT_DIR/fetch-twitter.py" ;;
     reddit) echo "$SCRIPT_DIR/fetch-reddit.py" ;;
     v2ex) echo "$SCRIPT_DIR/fetch-v2ex.py" ;;
+    zhihu) echo "$SCRIPT_DIR/fetch-zhihu.py" ;;
+    weibo) echo "$SCRIPT_DIR/fetch-weibo.py" ;;
+    toutiao) echo "$SCRIPT_DIR/fetch-toutiao.py" ;;
     google) echo "$SCRIPT_DIR/fetch-google.py" ;;
     *) return 1 ;;
   esac
@@ -51,6 +57,9 @@ step_output_path() {
     twitter) echo "$TWITTER_JSON" ;;
     reddit) echo "$REDDIT_JSON" ;;
     v2ex) echo "$V2EX_JSON" ;;
+    zhihu) echo "$ZHIHU_JSON" ;;
+    weibo) echo "$WEIBO_JSON" ;;
+    toutiao) echo "$TOUTIAO_JSON" ;;
     google) echo "$GOOGLE_JSON" ;;
     merge) echo "$MERGED_JSON" ;;
     hotspots) echo "$STEP_OUTPUT_DIR/merge-hotspots.json" ;;
@@ -64,7 +73,7 @@ Unified maintainer test entrypoint for news-hotspots.
 
 USAGE:
   ./scripts/test-news-hotspots.sh full [--hours N] [--config DIR] [--verbose] [--force] [--skip a,b]
-  ./scripts/test-news-hotspots.sh step <rss|github|trending|api|twitter|reddit|v2ex|google|merge|hotspots|validate> [--hours N] [--config DIR] [--verbose] [--force]
+  ./scripts/test-news-hotspots.sh step <rss|github|trending|api|twitter|reddit|v2ex|zhihu|weibo|toutiao|google|merge|hotspots|validate> [--hours N] [--config DIR] [--verbose] [--force]
   ./scripts/test-news-hotspots.sh health [--verbose]
   ./scripts/test-news-hotspots.sh unit [tests.test_hotspots tests.test_merge ...]
 
@@ -78,6 +87,9 @@ OUTPUTS:
     /tmp/news-hotspots/debug/trending.meta.json
     /tmp/news-hotspots/debug/api.meta.json
     /tmp/news-hotspots/debug/v2ex.meta.json
+    /tmp/news-hotspots/debug/zhihu.meta.json
+    /tmp/news-hotspots/debug/weibo.meta.json
+    /tmp/news-hotspots/debug/toutiao.meta.json
     /tmp/news-hotspots/debug/reddit.meta.json
     /tmp/news-hotspots/debug/merge-sources.meta.json
     /tmp/news-hotspots/debug/merge-hotspots.meta.json
@@ -88,6 +100,9 @@ OUTPUTS:
     /tmp/news-hotspots/debug/trending.json
     /tmp/news-hotspots/debug/api.json
     /tmp/news-hotspots/debug/v2ex.json
+    /tmp/news-hotspots/debug/zhihu.json
+    /tmp/news-hotspots/debug/weibo.json
+    /tmp/news-hotspots/debug/toutiao.json
     /tmp/news-hotspots/debug/reddit.json
     /tmp/news-hotspots/debug/merge-sources.json
     /tmp/news-hotspots/debug/merge-hotspots.json
@@ -102,6 +117,9 @@ OUTPUTS:
     /tmp/news-hotspots/debug/twitter.json
     /tmp/news-hotspots/debug/reddit.json
     /tmp/news-hotspots/debug/v2ex.json
+    /tmp/news-hotspots/debug/zhihu.json
+    /tmp/news-hotspots/debug/weibo.json
+    /tmp/news-hotspots/debug/toutiao.json
     /tmp/news-hotspots/debug/google.json
     /tmp/news-hotspots/debug/merge-sources.json
     /tmp/news-hotspots/debug/merge-hotspots.json
@@ -203,7 +221,7 @@ run_fetch_step() {
   mkdir -p "$TMP_DIR" "$DEBUG_DIR"
   local cmd=(uv run "$script_path")
   case "$step" in
-    api|v2ex)
+    api|v2ex|zhihu|weibo|toutiao)
       if [ "$VERBOSE" = true ]; then
         cmd+=(--verbose)
       fi
@@ -236,7 +254,7 @@ run_step() {
       fi
       run_cmd "${cmd[@]}"
       ;;
-    rss|github|trending|api|twitter|reddit|v2ex|google)
+    rss|github|trending|api|twitter|reddit|v2ex|zhihu|weibo|toutiao|google)
       run_fetch_step "$step"
       ;;
     merge)
@@ -249,6 +267,9 @@ run_step() {
         "--twitter:$TWITTER_JSON" \
         "--reddit:$REDDIT_JSON" \
         "--v2ex:$V2EX_JSON" \
+        "--zhihu:$ZHIHU_JSON" \
+        "--weibo:$WEIBO_JSON" \
+        "--toutiao:$TOUTIAO_JSON" \
         "--google:$GOOGLE_JSON"; do
         local flag="${pair%%:*}"
         local path="${pair#*:}"

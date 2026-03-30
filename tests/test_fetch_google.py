@@ -29,7 +29,7 @@ class TestFetchGoogle(unittest.TestCase):
         topic = {
             "id": "ai-frontier",
             "search": {
-                "queries": ["OpenAI", "Anthropic"],
+                "google_queries": ["OpenAI", "Anthropic"],
                 "exclude": ["tutorial"],
             },
             "display": {"max_items": 2},

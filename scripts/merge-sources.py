@@ -4,7 +4,7 @@ Merge data from enabled fetch steps with layered scoring and deduplication.
 
 Reads output from fetch-rss.py, fetch-twitter.py, fetch-google.py,
 fetch-github.py, fetch-github-trending.py, fetch-api.py, fetch-reddit.py,
-fetch-v2ex.py, and any other compatible JSON inputs that are provided.
+fetch-v2ex.py, fetch-zhihu.py, fetch-weibo.py, fetch-toutiao.py, and any other compatible JSON inputs that are provided.
 """
 
 import argparse
@@ -36,27 +36,28 @@ except ImportError:  # pragma: no cover - defensive fallback
 SCORING_CONFIG = {
     "fetch_rank_max": 3.0,
     "history_threshold": 0.88,
-    "history_penalties": [
+    "history_scores": [
         (0.96, -16.0),
         (0.92, -12.0),
         (0.88, -8.0),
     ],
     "cross_source_hot_threshold": 0.86,
     "duplicate_threshold": 0.92,
-    "cross_source_hot_per_extra_type": 2.0,
-    "cross_source_hot_cap": 6.0,
-    "recency_24h_bonus": 1.0,
-    "recency_6h_bonus": 0.5,
-    "topic_same_source_penalty": 1.5,
-    "topic_same_domain_penalty": 0.75,
-    "topic_first3_source_penalty": 3.0,
-    "topic_first3_domain_penalty": 1.5,
+    "cross_source_hot_score_per_extra_type": 2.0,
+    "cross_source_hot_score_cap": 6.0,
+    "recency_24h_score": 1.0,
+    "recency_6h_score": 0.5,
+    "topic_same_source_score": -1.5,
+    "topic_same_domain_score": -0.75,
+    "topic_first3_source_score": -3.0,
+    "topic_first3_domain_score": -1.5,
 }
 
 SCORE_DEBUG_COMMENTS = {
-    "score_debug": "评分计算说明，只保留 final_score 公式和各项分值。",
+    "scoring_debug": "评分计算说明，只保留 final_score 公式和各项分值。",
     "final_score": "merge-sources 阶段最终分，由多个分数组件相加得到。",
-    "topic_rerank_debug": "topic 内重排说明。为了来源多样性，会对重复 source/domain 施加惩罚后再排序。",
+    "similarity_debug": "相似度与去重摘要，帮助理解历史重复、重复合并和跨来源共振。",
+    "reranking_debug": "兼容旧字段。当前 topic 内顺序直接按 final_score 降序输出，不再在 merge-sources 阶段做二次重排。",
 }
 
 SCORE_ENGAGEMENT_VIRAL = 5
@@ -391,18 +392,18 @@ def calculate_local_extra_details(article: Dict[str, Any], source_type: str) -> 
 
     if source_type == "v2ex":
         replies = article.get("replies", 0)
-        bonus = float(calculate_v2ex_replies_bonus(replies))
+        score = float(calculate_v2ex_replies_score(replies))
         return {
-            "score": bonus,
+            "score": score,
             "rule": "v2ex_replies",
-            "tier": "none" if bonus == 0 else "matched",
+            "tier": "none" if score == 0 else "matched",
             "matched_on": {"replies": replies},
         }
 
     return {"score": 0.0, "rule": "unsupported", "tier": "none", "matched_on": {}}
 
 
-def calculate_v2ex_replies_bonus(replies: Any) -> int:
+def calculate_v2ex_replies_score(replies: Any) -> int:
     try:
         replies_int = int(replies)
     except (TypeError, ValueError):
@@ -418,11 +419,11 @@ def calculate_v2ex_replies_bonus(replies: Any) -> int:
     return 0
 
 
-def calculate_recency_bonus(article: Dict[str, Any]) -> float:
-    return calculate_recency_bonus_details(article)["score"]
+def calculate_recency_score(article: Dict[str, Any]) -> float:
+    return calculate_recency_score_details(article)["score"]
 
 
-def calculate_recency_bonus_details(article: Dict[str, Any]) -> Dict[str, Any]:
+def calculate_recency_score_details(article: Dict[str, Any]) -> Dict[str, Any]:
     article_date = parse_article_datetime(article.get("date"))
     if article_date is None:
         return {"score": 0.0, "hours_old": None, "bucket": "missing_date"}
@@ -430,13 +431,13 @@ def calculate_recency_bonus_details(article: Dict[str, Any]) -> Dict[str, Any]:
     hours_old = (datetime.now(timezone.utc) - article_date).total_seconds() / 3600
     if hours_old < 6:
         return {
-            "score": SCORING_CONFIG["recency_24h_bonus"] + SCORING_CONFIG["recency_6h_bonus"],
+            "score": SCORING_CONFIG["recency_24h_score"] + SCORING_CONFIG["recency_6h_score"],
             "hours_old": round(hours_old, 3),
             "bucket": "under_6h",
         }
     if hours_old < 24:
         return {
-            "score": SCORING_CONFIG["recency_24h_bonus"],
+            "score": SCORING_CONFIG["recency_24h_score"],
             "hours_old": round(hours_old, 3),
             "bucket": "under_24h",
         }
@@ -449,25 +450,37 @@ def initialize_article_scores(articles: List[Dict[str, Any]]) -> None:
         base_priority_score = float(normalize_priority(article.get("source_priority", 3)))
         local_extra_details = calculate_local_extra_details(article, source_type)
         local_extra_score = local_extra_details["score"]
-        article["score_breakdown"] = {
+        article["_score_components"] = {
             "base_priority_score": base_priority_score,
             "local_extra_score": local_extra_score,
             "fetch_local_rank_score": 0.0,
-            "history_penalty": 0.0,
-            "cross_source_hot_bonus": 0.0,
-            "recency_bonus": 0.0,
+            "history_score": 0.0,
+            "cross_source_hot_score": 0.0,
+            "recency_score": 0.0,
         }
         article["similarity_debug"] = {
-            "best_history_similarity": 0.0,
-            "duplicate_cluster_id": None,
-            "cluster_size": 1,
-            "cross_source_match_count": 0,
+            "_comment": SCORE_DEBUG_COMMENTS["similarity_debug"],
+            "history_similarity": 0.0,
+            "history_duplicate": False,
+            "duplicate_group": {
+                "merged": False,
+                "cluster_size": 1,
+            },
+            "cross_source_hot": {
+                "matched_source_type_count": 0,
+                "score": 0.0,
+            },
+            "fields_comment_zh": {
+                "history_similarity": "与历史热点标题的最高相似度，范围通常为 0 到 1。",
+                "history_duplicate": "是否因为命中历史重复分值规则而被判定为历史重复内容。",
+                "duplicate_group": "当前文章是否与其他文章合并，以及合并后的重复簇大小。",
+                "cross_source_hot": "当前文章被多个不同 source_type 同时命中时，对应的命中数和分值影响。",
+            },
         }
-        article["score_debug"] = {
-            "_comment": SCORE_DEBUG_COMMENTS["score_debug"],
-            "final_score_formula": "base_priority_score + fetch_local_rank_score + history_penalty + cross_source_hot_bonus + recency_bonus",
+        article["scoring_debug"] = {
+            "_comment": SCORE_DEBUG_COMMENTS["scoring_debug"],
+            "final_score_formula": "base_priority_score + fetch_local_rank_score + history_score + cross_source_hot_score + recency_score",
         }
-        article["quality_score"] = base_priority_score
         article["final_score"] = base_priority_score
 
 
@@ -480,7 +493,7 @@ def assign_fetch_rank_scores(articles: List[Dict[str, Any]]) -> None:
         ordered = sorted(
             group,
             key=lambda item: (
-                -(item["score_breakdown"]["base_priority_score"] + item["score_breakdown"]["local_extra_score"]),
+                -(item["_score_components"]["base_priority_score"] + item["_score_components"]["local_extra_score"]),
                 item.get("title", ""),
             ),
         )
@@ -491,7 +504,7 @@ def assign_fetch_rank_scores(articles: List[Dict[str, Any]]) -> None:
             else:
                 rank_pct = 1.0 - ((rank - 1) / (total - 1))
             rank_score = round(SCORING_CONFIG["fetch_rank_max"] * rank_pct, 3)
-            article["score_breakdown"]["fetch_local_rank_score"] = rank_score
+            article["_score_components"]["fetch_local_rank_score"] = rank_score
         logging.debug("Assigned fetch-local rank scores for %s (%d items)", fetch_type, total)
 
 
@@ -512,27 +525,22 @@ def best_history_similarity(article: Dict[str, Any], previous_title_features: Li
     return best
 
 
-def history_penalty_for_similarity(value: float) -> float:
-    for threshold, penalty in SCORING_CONFIG["history_penalties"]:
+def history_score_for_similarity(value: float) -> float:
+    for threshold, score in SCORING_CONFIG["history_scores"]:
         if value >= threshold:
-            return penalty
+            return score
     return 0.0
 
 
-def apply_history_penalties(articles: List[Dict[str, Any]], previous_titles: Iterable[str]) -> None:
+def apply_history_scores(articles: List[Dict[str, Any]], previous_titles: Iterable[str]) -> None:
     previous_features = build_previous_title_features(previous_titles)
     for article in articles:
         similarity = best_history_similarity(article, previous_features)
-        penalty = history_penalty_for_similarity(similarity)
-        matched_threshold = None
-        for threshold, candidate_penalty in SCORING_CONFIG["history_penalties"]:
-            if similarity >= threshold and candidate_penalty == penalty:
-                matched_threshold = threshold
-                break
-        article["similarity_debug"]["best_history_similarity"] = round(similarity, 4)
-        article["score_breakdown"]["history_penalty"] = penalty
-        if penalty < 0:
-            article["in_previous_digest"] = True
+        score = history_score_for_similarity(similarity)
+        article["similarity_debug"]["history_similarity"] = round(similarity, 4)
+        article["_score_components"]["history_score"] = score
+        if score < 0:
+            article["similarity_debug"]["history_duplicate"] = True
 
 
 def build_candidate_pairs(articles: List[Dict[str, Any]]) -> Iterable[Tuple[int, int]]:
@@ -611,7 +619,7 @@ def build_candidate_pairs(articles: List[Dict[str, Any]]) -> Iterable[Tuple[int,
                     yield pair
 
 
-def apply_cross_source_hot_bonus(articles: List[Dict[str, Any]], pair_similarities: Dict[Tuple[int, int], float]) -> None:
+def apply_cross_source_hot_scores(articles: List[Dict[str, Any]], pair_similarities: Dict[Tuple[int, int], float]) -> None:
     hot_union = UnionFind(len(articles))
     for (i, j), similarity in pair_similarities.items():
         if similarity < SCORING_CONFIG["cross_source_hot_threshold"]:
@@ -627,49 +635,70 @@ def apply_cross_source_hot_bonus(articles: List[Dict[str, Any]], pair_similariti
     for indices in hot_groups.values():
         source_types = {articles[idx].get("source_type", "") for idx in indices if articles[idx].get("source_type")}
         extra_types = max(0, len(source_types) - 1)
-        bonus = min(
-            SCORING_CONFIG["cross_source_hot_cap"],
-            SCORING_CONFIG["cross_source_hot_per_extra_type"] * extra_types,
+        score = min(
+            SCORING_CONFIG["cross_source_hot_score_cap"],
+            SCORING_CONFIG["cross_source_hot_score_per_extra_type"] * extra_types,
         )
         for idx in indices:
-            articles[idx]["score_breakdown"]["cross_source_hot_bonus"] = bonus
-            articles[idx]["similarity_debug"]["cross_source_match_count"] = extra_types
+            articles[idx]["_score_components"]["cross_source_hot_score"] = score
+            articles[idx]["similarity_debug"]["cross_source_hot"]["matched_source_type_count"] = extra_types
 
 
 def recalculate_final_scores(articles: List[Dict[str, Any]]) -> None:
     for article in articles:
-        breakdown = article["score_breakdown"]
-        recency_details = calculate_recency_bonus_details(article)
-        breakdown["recency_bonus"] = recency_details["score"]
+        score_components = article["_score_components"]
+        recency_details = calculate_recency_score_details(article)
+        score_components["recency_score"] = recency_details["score"]
         final_score = (
-            breakdown["base_priority_score"]
-            + breakdown["fetch_local_rank_score"]
-            + breakdown["history_penalty"]
-            + breakdown["cross_source_hot_bonus"]
-            + breakdown["recency_bonus"]
+            score_components["base_priority_score"]
+            + score_components["fetch_local_rank_score"]
+            + score_components["history_score"]
+            + score_components["cross_source_hot_score"]
+            + score_components["recency_score"]
         )
         article["final_score"] = round(final_score, 3)
-        article["quality_score"] = article["final_score"]
-        article["score_debug"]["final_score"] = {
+        article["scoring_debug"]["final_score"] = {
             "_comment": SCORE_DEBUG_COMMENTS["final_score"],
-            "score": article["final_score"],
+            "value": article["final_score"],
             "components": {
-                "base_priority_score": breakdown["base_priority_score"],
-                "local_extra_score": breakdown["local_extra_score"],
-                "fetch_local_rank_score": breakdown["fetch_local_rank_score"],
-                "history_penalty": breakdown["history_penalty"],
-                "cross_source_hot_bonus": breakdown["cross_source_hot_bonus"],
-                "recency_bonus": breakdown["recency_bonus"],
+                "base_priority_score": score_components["base_priority_score"],
+                "local_extra_score": score_components["local_extra_score"],
+                "fetch_local_rank_score": score_components["fetch_local_rank_score"],
+                "history_score": score_components["history_score"],
+                "cross_source_hot_score": score_components["cross_source_hot_score"],
+                "recency_score": score_components["recency_score"],
             },
             "components_comment_zh": {
                 "base_priority_score": "基础分，来自 source_priority。",
                 "local_extra_score": "源内热度参考分，用于解释该条内容的站内热度信号。",
-                "fetch_local_rank_score": "同 source_type 内按排序位置得到的加分。",
-                "history_penalty": "与历史热点相似时的扣分。",
-                "cross_source_hot_bonus": "被多个不同 source_type 命中时的加分。",
-                "recency_bonus": "时效性加分。",
+                "fetch_local_rank_score": "同 source_type 内按排序位置得到的分值影响。",
+                "history_score": "与历史热点相似时带来的分值影响，重复时通常为负分。",
+                "cross_source_hot_score": "被多个不同 source_type 命中时的分值影响。",
+                "recency_score": "时效性带来的分值影响。",
             },
         }
+        article["similarity_debug"]["cross_source_hot"]["score"] = score_components["cross_source_hot_score"]
+
+
+def build_output_scoring_config() -> Dict[str, Any]:
+    return {
+        "fetch_rank_max_score": SCORING_CONFIG["fetch_rank_max"],
+        "history_threshold": SCORING_CONFIG["history_threshold"],
+        "history_score_rules": [
+            {"threshold": threshold, "score": score}
+            for threshold, score in SCORING_CONFIG["history_scores"]
+        ],
+        "cross_source_hot_threshold": SCORING_CONFIG["cross_source_hot_threshold"],
+        "duplicate_threshold": SCORING_CONFIG["duplicate_threshold"],
+        "cross_source_hot_score_per_extra_type": SCORING_CONFIG["cross_source_hot_score_per_extra_type"],
+        "cross_source_hot_score_cap": SCORING_CONFIG["cross_source_hot_score_cap"],
+        "recency_24h_score": SCORING_CONFIG["recency_24h_score"],
+        "recency_6h_score": SCORING_CONFIG["recency_6h_score"],
+        "topic_same_source_score": SCORING_CONFIG["topic_same_source_score"],
+        "topic_same_domain_score": SCORING_CONFIG["topic_same_domain_score"],
+        "topic_first3_source_score": SCORING_CONFIG["topic_first3_source_score"],
+        "topic_first3_domain_score": SCORING_CONFIG["topic_first3_domain_score"],
+    }
 
 
 def apply_similarity_scoring(articles: List[Dict[str, Any]], previous_titles: Iterable[str]) -> Dict[Tuple[int, int], float]:
@@ -677,7 +706,7 @@ def apply_similarity_scoring(articles: List[Dict[str, Any]], previous_titles: It
         article["_similarity_features"] = build_similarity_features(article)
 
     assign_fetch_rank_scores(articles)
-    apply_history_penalties(articles, previous_titles)
+    apply_history_scores(articles, previous_titles)
 
     pair_similarities: Dict[Tuple[int, int], float] = {}
     for i, j in build_candidate_pairs(articles):
@@ -687,7 +716,7 @@ def apply_similarity_scoring(articles: List[Dict[str, Any]], previous_titles: It
             continue
         pair_similarities[(i, j)] = calculate_similarity_from_features(features_i, features_j)
 
-    apply_cross_source_hot_bonus(articles, pair_similarities)
+    apply_cross_source_hot_scores(articles, pair_similarities)
     recalculate_final_scores(articles)
     return pair_similarities
 
@@ -702,11 +731,12 @@ def merge_cluster_metadata(canonical: Dict[str, Any], cluster_articles: List[Dic
             unique_sources.append(source_name)
 
     canonical["multi_source"] = len({a.get("source_type") for a in cluster_articles}) > 1
-    canonical["source_count"] = len(unique_sources)
-    canonical["all_sources"] = unique_sources[:5]
-    canonical["cluster_size"] = len(cluster_articles)
-    canonical["similarity_debug"]["duplicate_cluster_id"] = cluster_id
-    canonical["similarity_debug"]["cluster_size"] = len(cluster_articles)
+    canonical["source_name_count"] = len(unique_sources)
+    canonical["source_names"] = unique_sources[:5]
+    canonical["similarity_debug"]["duplicate_group"] = {
+        "merged": len(cluster_articles) > 1,
+        "cluster_size": len(cluster_articles),
+    }
 
     merged_topic = resolve_primary_topic(cluster_articles, default=canonical.get("topic", ""))
     if merged_topic:
@@ -724,11 +754,6 @@ def deduplicate_articles(articles: List[Dict[str, Any]], previous_titles: Option
     pair_similarities = apply_similarity_scoring(articles, previous_titles or [])
 
     duplicate_union = UnionFind(len(articles))
-    for idx, article in enumerate(articles):
-        norm_url = article["_similarity_features"]["normalized_url"]
-        if norm_url:
-            pass
-        article["similarity_debug"]["duplicate_cluster_id"] = idx
 
     for (i, j), similarity in pair_similarities.items():
         if similarity >= SCORING_CONFIG["duplicate_threshold"]:
@@ -748,8 +773,8 @@ def deduplicate_articles(articles: List[Dict[str, Any]], previous_titles: Option
         canonical = max(
             cluster_articles,
             key=lambda item: (
-                item.get("final_score", item.get("quality_score", 0)),
-                item["score_breakdown"]["local_extra_score"],
+                item.get("final_score", 0),
+                item["_score_components"]["local_extra_score"],
                 item.get("title", ""),
             ),
         )
@@ -790,7 +815,7 @@ def load_previous_hotspots(archive_dir: Path, days: int = 14) -> List[str]:
     seen_titles: List[str] = []
     cutoff_date = (datetime.now(timezone.utc) - timedelta(days=days)).date()
     try:
-        for file_path in sorted(archive_dir.rglob("*.json")):
+        for file_path in sorted(archive_dir.rglob("daily*.json")):
             if file_path.parent.name != "json":
                 continue
             match = re.search(r"(\d{4}-\d{2}-\d{2})", str(file_path))
@@ -801,6 +826,8 @@ def load_previous_hotspots(archive_dir: Path, days: int = 14) -> List[str]:
                         continue
                 except ValueError:
                     continue
+            if not file_path.name.startswith("daily"):
+                continue
             with open(file_path, "r", encoding="utf-8") as handle:
                 data = json.load(handle)
             for topic in data.get("topics", []):
@@ -813,82 +840,6 @@ def load_previous_hotspots(archive_dir: Path, days: int = 14) -> List[str]:
 
     logging.info("Loaded %d titles from previous %d days under %s", len(seen_titles), days, archive_dir)
     return seen_titles
-
-
-def rerank_topic_articles(articles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    remaining = list(articles)
-    selected: List[Dict[str, Any]] = []
-    source_counts: Dict[str, int] = defaultdict(int)
-    domain_counts: Dict[str, int] = defaultdict(int)
-
-    while remaining:
-        slot = len(selected)
-        source_penalty = (
-            SCORING_CONFIG["topic_first3_source_penalty"]
-            if slot < 3
-            else SCORING_CONFIG["topic_same_source_penalty"]
-        )
-        domain_penalty = (
-            SCORING_CONFIG["topic_first3_domain_penalty"]
-            if slot < 3
-            else SCORING_CONFIG["topic_same_domain_penalty"]
-        )
-
-        def display_score(article: Dict[str, Any]) -> Tuple[float, float]:
-            source_type = article.get("source_type", "")
-            domain = get_domain(article.get("link", ""))
-            value = (
-                article.get("final_score", article.get("quality_score", 0))
-                - source_penalty * source_counts.get(source_type, 0)
-                - domain_penalty * domain_counts.get(domain, 0)
-            )
-            return value, article.get("final_score", article.get("quality_score", 0))
-
-        best = max(remaining, key=display_score)
-        best_source_type = best.get("source_type", "")
-        best_domain = get_domain(best.get("link", ""))
-        best_base_score = best.get("final_score", best.get("quality_score", 0))
-        best_display_score = (
-            best_base_score
-            - source_penalty * source_counts.get(best_source_type, 0)
-            - domain_penalty * domain_counts.get(best_domain, 0)
-        )
-        remaining.remove(best)
-        best["topic_rerank_debug"] = {
-            "_comment": SCORE_DEBUG_COMMENTS["topic_rerank_debug"],
-            "slot": slot + 1,
-            "inputs": {
-                "final_score": {
-                    "value": round(best_base_score, 3),
-                    "from": "merge-sources final_score",
-                    "purpose": "作为 topic 内重排的基础分。",
-                },
-                "source_repeat_penalty": {
-                    "penalty_per_repeat": source_penalty,
-                    "repeat_count_before_pick": source_counts.get(best_source_type, 0),
-                    "from": "当前 topic 已入选内容里相同 source_type 的数量",
-                    "purpose": "减少同一来源类型连续霸榜，提升来源多样性。",
-                    "applied_penalty": round(source_penalty * source_counts.get(best_source_type, 0), 3),
-                },
-                "domain_repeat_penalty": {
-                    "penalty_per_repeat": domain_penalty,
-                    "repeat_count_before_pick": domain_counts.get(best_domain, 0),
-                    "from": "当前 topic 已入选内容里相同域名的数量",
-                    "purpose": "减少同一站点重复出现，提升站点多样性。",
-                    "applied_penalty": round(domain_penalty * domain_counts.get(best_domain, 0), 3),
-                },
-            },
-            "display_score": round(best_display_score, 3),
-            "formula": "final_score - source_repeat_penalty - domain_repeat_penalty",
-            "summary_zh": "topic 重排只在 final_score 基础上减去来源类型重复惩罚和域名重复惩罚，得到当前 slot 的 display_score。",
-        }
-        selected.append(best)
-        source_counts[best.get("source_type", "")] += 1
-        domain = get_domain(best.get("link", ""))
-        if domain:
-            domain_counts[domain] += 1
-
-    return selected
 
 
 def group_by_topics(articles: List[Dict[str, Any]], dedup_across_topics: bool = True) -> Dict[str, List[Dict[str, Any]]]:
@@ -909,8 +860,11 @@ def group_by_topics(articles: List[Dict[str, Any]], dedup_across_topics: bool = 
         topic_groups[primary_topic].append(article_copy)
 
     for topic, topic_articles in topic_groups.items():
-        ordered = sorted(topic_articles, key=lambda item: item.get("final_score", item.get("quality_score", 0)), reverse=True)
-        topic_groups[topic] = rerank_topic_articles(ordered)
+        topic_groups[topic] = sorted(
+            topic_articles,
+            key=lambda item: item.get("final_score", 0),
+            reverse=True,
+        )
 
     return topic_groups
 
@@ -943,6 +897,9 @@ def collect_articles(
     reddit_data: Dict[str, Any],
     api_data: Dict[str, Any],
     v2ex_data: Dict[str, Any],
+    zhihu_data: Dict[str, Any],
+    weibo_data: Dict[str, Any],
+    toutiao_data: Dict[str, Any],
 ) -> List[Dict[str, Any]]:
     all_articles: List[Dict[str, Any]] = []
 
@@ -969,6 +926,17 @@ def collect_articles(
             })
             all_articles.append(enriched)
 
+    for topic_result in twitter_data.get("topics", []):
+        for article in topic_result.get("articles", []):
+            enriched = article.copy()
+            enriched.update({
+                "source_type": "twitter",
+                "source_name": "Twitter Search",
+                "source_id": f"twitter-{topic_result.get('topic_id', '')}",
+                "source_priority": 3,
+            })
+            all_articles.append(enriched)
+
     for topic_result in google_data.get("topics", []):
         for article in topic_result.get("articles", []):
             enriched = article.copy()
@@ -991,7 +959,11 @@ def collect_articles(
             })
             all_articles.append(enriched)
 
-    for source in reddit_data.get("subreddits", []):
+    reddit_source_records = reddit_data.get("sources", [])
+    if not isinstance(reddit_source_records, list) or not reddit_source_records:
+        reddit_source_records = reddit_data.get("subreddits", [])
+
+    for source in reddit_source_records:
         for article in source.get("articles", []):
             enriched = article.copy()
             enriched.update({
@@ -999,6 +971,17 @@ def collect_articles(
                 "source_name": f"r/{source.get('subreddit', '')}",
                 "source_id": source.get("source_id", ""),
                 "source_priority": normalize_priority(source.get("priority", 3)),
+            })
+            all_articles.append(enriched)
+
+    for topic_result in reddit_data.get("topics", []):
+        for article in topic_result.get("articles", []):
+            enriched = article.copy()
+            enriched.update({
+                "source_type": "reddit",
+                "source_name": "Reddit Search",
+                "source_id": f"reddit-{topic_result.get('topic_id', '')}",
+                "source_priority": 3,
             })
             all_articles.append(enriched)
 
@@ -1018,6 +1001,39 @@ def collect_articles(
             enriched = article.copy()
             enriched.update({
                 "source_type": "v2ex",
+                "source_name": source.get("name", ""),
+                "source_id": source.get("source_id", ""),
+                "source_priority": normalize_priority(source.get("priority", 3)),
+            })
+            all_articles.append(enriched)
+
+    for source in zhihu_data.get("sources", []):
+        for article in source.get("articles", []):
+            enriched = article.copy()
+            enriched.update({
+                "source_type": "zhihu",
+                "source_name": source.get("name", ""),
+                "source_id": source.get("source_id", ""),
+                "source_priority": normalize_priority(source.get("priority", 3)),
+            })
+            all_articles.append(enriched)
+
+    for source in weibo_data.get("sources", []):
+        for article in source.get("articles", []):
+            enriched = article.copy()
+            enriched.update({
+                "source_type": "weibo",
+                "source_name": source.get("name", ""),
+                "source_id": source.get("source_id", ""),
+                "source_priority": normalize_priority(source.get("priority", 3)),
+            })
+            all_articles.append(enriched)
+
+    for source in toutiao_data.get("sources", []):
+        for article in source.get("articles", []):
+            enriched = article.copy()
+            enriched.update({
+                "source_type": "toutiao",
                 "source_name": source.get("name", ""),
                 "source_id": source.get("source_id", ""),
                 "source_priority": normalize_priority(source.get("priority", 3)),
@@ -1056,12 +1072,15 @@ def load_input_payloads(args: argparse.Namespace) -> Dict[str, Dict[str, Any]]:
         "reddit": load_source_data(args.reddit),
         "api": load_source_data(args.api),
         "v2ex": load_source_data(args.v2ex),
+        "zhihu": load_source_data(args.zhihu),
+        "weibo": load_source_data(args.weibo),
+        "toutiao": load_source_data(args.toutiao),
     }
 
 
 def log_input_summary(payloads: Dict[str, Dict[str, Any]]) -> None:
     logging.info(
-        "Loaded sources - RSS: %s, Twitter: %s, Google: %s, GitHub: %s + %s trending, Reddit: %s, API: %s, V2EX: %s",
+        "Loaded sources - RSS: %s, Twitter: %s, Google: %s, GitHub: %s + %s trending, Reddit: %s, API: %s, V2EX: %s, Zhihu: %s, Weibo: %s, Toutiao: %s",
         payloads["rss"].get("total_articles", 0),
         payloads["twitter"].get("total_articles", 0),
         payloads["google"].get("total_articles", 0),
@@ -1070,6 +1089,9 @@ def log_input_summary(payloads: Dict[str, Dict[str, Any]]) -> None:
         payloads["reddit"].get("total_posts", 0),
         payloads["api"].get("total_articles", 0),
         payloads["v2ex"].get("total_articles", 0),
+        payloads["zhihu"].get("total_articles", 0),
+        payloads["weibo"].get("total_articles", 0),
+        payloads["toutiao"].get("total_articles", 0),
     )
 
 
@@ -1086,6 +1108,9 @@ def process_articles(
         payloads["reddit"],
         payloads["api"],
         payloads["v2ex"],
+        payloads["zhihu"],
+        payloads["weibo"],
+        payloads["toutiao"],
     )
     total_collected = len(all_articles)
     logging.info("Total articles collected: %d", total_collected)
@@ -1116,6 +1141,13 @@ def build_merged_output(
 ) -> Dict[str, Any]:
     total_after_domain_limits = sum(len(items) for items in topic_groups.values())
     topic_counts = {topic: len(items) for topic, items in topic_groups.items()}
+    serialized_topics = {
+        topic: {
+            "count": len(items),
+            "articles": [serialize_article_for_output(article) for article in items],
+        }
+        for topic, items in topic_groups.items()
+    }
     return {
         "generated": datetime.now(timezone.utc).isoformat(),
         "input_sources": {
@@ -1127,31 +1159,39 @@ def build_merged_output(
             "reddit_posts": payloads["reddit"].get("total_posts", 0),
             "api_articles": payloads["api"].get("total_articles", 0),
             "v2ex_articles": payloads["v2ex"].get("total_articles", 0),
+            "zhihu_articles": payloads["zhihu"].get("total_articles", 0),
+            "weibo_articles": payloads["weibo"].get("total_articles", 0),
+            "toutiao_articles": payloads["toutiao"].get("total_articles", 0),
             "total_input": total_collected,
         },
         "processing": {
             "deduplication_applied": True,
             "multi_source_merging": True,
-            "previous_hotspots_penalty": len(previous_titles) > 0,
-            "quality_scoring": True,
+            "previous_hotspots_scoring_applied": len(previous_titles) > 0,
+            "scoring_applied": True,
             "scoring_version": "2.0",
-            "scoring_comment_zh": "merge-sources 会先算每条内容的合并分，再在每个 topic 内做一次来源多样性重排。",
+            "scoring_comment_zh": "merge-sources 会先算每条内容的合并分，并直接按 final_score 输出每个 topic 内顺序。",
             "score_formula": {
-                "merge_score": "base_priority_score + fetch_local_rank_score + history_penalty + cross_source_hot_bonus + recency_bonus",
-                "topic_rerank": "final_score - source_penalty * repeated_source_count - domain_penalty * repeated_domain_count",
+                "merge_score": "base_priority_score + fetch_local_rank_score + history_score + cross_source_hot_score + recency_score",
+                "topic_ordering": "sort_by_final_score_desc",
             },
-            "scoring_config": SCORING_CONFIG,
+            "scoring_config": build_output_scoring_config(),
         },
         "output_stats": {
             "total_articles": total_after_domain_limits,
             "topics_count": len(topic_groups),
             "topic_distribution": topic_counts,
         },
-        "topics": {
-            topic: {"count": len(items), "articles": items}
-            for topic, items in topic_groups.items()
-        },
+        "topics": {topic: payload for topic, payload in serialized_topics.items()},
     }
+
+
+def serialize_article_for_output(article: Dict[str, Any]) -> Dict[str, Any]:
+    output = dict(article)
+    output.pop("_score_components", None)
+    output.pop("quality_score", None)
+    output.pop("cluster_size", None)
+    return output
 
 
 def parse_args() -> argparse.Namespace:
@@ -1168,8 +1208,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--reddit", type=Path, help="Reddit posts results JSON file")
     parser.add_argument("--api", type=Path, help="API sources results JSON file")
     parser.add_argument("--v2ex", type=Path, help="V2EX hot topics results JSON file")
+    parser.add_argument("--zhihu", type=Path, help="Zhihu hot topics results JSON file")
+    parser.add_argument("--weibo", type=Path, help="Weibo hot topics results JSON file")
+    parser.add_argument("--toutiao", type=Path, help="Toutiao hot topics results JSON file")
     parser.add_argument("--output", "-o", type=Path, help="Output JSON path (default: auto-generated temp file)")
-    parser.add_argument("--archive", dest="archive_dir", type=Path, help="Archive directory for previous hotspots penalty")
+    parser.add_argument("--archive", dest="archive_dir", type=Path, help="Archive directory for previous hotspots scoring history")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
     return parser.parse_args()
 

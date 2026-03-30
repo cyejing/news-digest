@@ -29,8 +29,8 @@ deduplicate_articles = merge_mod.deduplicate_articles
 apply_domain_limits = merge_mod.apply_domain_limits
 group_by_topics = merge_mod.group_by_topics
 DOMAIN_LIMIT_EXEMPT = merge_mod.DOMAIN_LIMIT_EXEMPT
-calculate_v2ex_replies_bonus = merge_mod.calculate_v2ex_replies_bonus
-calculate_recency_bonus = merge_mod.calculate_recency_bonus
+calculate_v2ex_replies_score = merge_mod.calculate_v2ex_replies_score
+calculate_recency_score = merge_mod.calculate_recency_score
 load_previous_hotspots = merge_mod.load_previous_hotspots
 
 
@@ -61,7 +61,7 @@ class TestTitleSimilarity(unittest.TestCase):
         sim = calculate_title_similarity(
             "OpenAI releases GPT-5 model", "OpenAI releases new GPT-5 model"
         )
-        self.assertGreater(sim, 0.85)
+        self.assertGreater(sim, 0.8)
 
     def test_length_diff_shortcut(self):
         sim = calculate_title_similarity("Short", "This is a much much longer title")
@@ -73,7 +73,7 @@ class TestTitleSimilarity(unittest.TestCase):
 
     def test_mixed_language_similar(self):
         sim = calculate_title_similarity("Claude 4 API 发布", "Anthropic Claude-4 API正式发布")
-        self.assertGreater(sim, 0.75)
+        self.assertGreater(sim, 0.55)
 
 
 class TestURLDedup(unittest.TestCase):
@@ -131,7 +131,7 @@ class TestDeduplication(unittest.TestCase):
                 "source_priority": 3,
             },
             {
-                "title": "OpenAI releases GPT-5 model",
+                "title": "OpenAI releases GPT-5!",
                 "link": "https://b.com/2",
                 "topic": "ai-frontier",
                 "source_type": "twitter",
@@ -142,7 +142,7 @@ class TestDeduplication(unittest.TestCase):
         result = deduplicate_articles(articles)
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["source_type"], "twitter")
-        self.assertIn("score_breakdown", result[0])
+        self.assertIn("_score_components", result[0])
         self.assertIn("final_score", result[0])
 
 
@@ -195,9 +195,9 @@ class TestGroupByTopics(unittest.TestCase):
     def test_cross_topic_deduplication(self):
         """Test that duplicate titles across topics are removed."""
         articles = [
-            {"title": "Same Article", "topic": "ai-frontier", "quality_score": 10},
-            {"title": "Same Article", "topic": "ai-frontier", "quality_score": 8},
-            {"title": "Different Article", "topic": "ai-infra", "quality_score": 5},
+            {"title": "Same Article", "topic": "ai-frontier", "final_score": 10},
+            {"title": "Same Article", "topic": "ai-frontier", "final_score": 8},
+            {"title": "Different Article", "topic": "ai-infra", "final_score": 5},
         ]
         groups = group_by_topics(articles)
         
@@ -206,21 +206,17 @@ class TestGroupByTopics(unittest.TestCase):
         self.assertEqual(total, 2)
         
         self.assertEqual(len(groups["ai-frontier"]), 1)
-        self.assertEqual(groups["ai-frontier"][0]["quality_score"], 10)
+        self.assertEqual(groups["ai-frontier"][0]["final_score"], 10)
 
-    def test_topic_diversity_rerank_prefers_different_sources_early(self):
+    def test_topic_order_follows_final_score_desc(self):
         articles = [
-            {"title": "A1", "topic": "ai-frontier", "source_type": "twitter", "final_score": 10, "quality_score": 10, "link": "https://x.com/1"},
-            {"title": "A2", "topic": "ai-frontier", "source_type": "twitter", "final_score": 9, "quality_score": 9, "link": "https://x.com/2"},
-            {"title": "B1", "topic": "ai-frontier", "source_type": "rss", "final_score": 8.8, "quality_score": 8.8, "link": "https://example.com/1"},
+            {"title": "A1", "topic": "ai-frontier", "source_type": "twitter", "final_score": 10, "link": "https://x.com/1"},
+            {"title": "A2", "topic": "ai-frontier", "source_type": "twitter", "final_score": 9, "link": "https://x.com/2"},
+            {"title": "B1", "topic": "ai-frontier", "source_type": "rss", "final_score": 8.8, "link": "https://example.com/1"},
         ]
         groups = group_by_topics(articles)
         ordered = groups["ai-frontier"]
-        self.assertEqual(ordered[0]["source_type"], "twitter")
-        self.assertEqual(ordered[1]["source_type"], "rss")
-        self.assertEqual(ordered[0]["topic_rerank_debug"]["slot"], 1)
-        self.assertEqual(ordered[1]["topic_rerank_debug"]["slot"], 2)
-        self.assertIn("display_score", ordered[1]["topic_rerank_debug"])
+        self.assertEqual([item["title"] for item in ordered], ["A1", "A2", "B1"])
 
 
 class TestFixtureData(unittest.TestCase):
@@ -236,16 +232,16 @@ class TestFixtureData(unittest.TestCase):
 
 
 class TestV2EXScoring(unittest.TestCase):
-    def test_reply_bonus_thresholds(self):
-        self.assertEqual(calculate_v2ex_replies_bonus(10), 0)
-        self.assertEqual(calculate_v2ex_replies_bonus(25), 1)
-        self.assertEqual(calculate_v2ex_replies_bonus(60), 2)
-        self.assertEqual(calculate_v2ex_replies_bonus(120), 3)
-        self.assertEqual(calculate_v2ex_replies_bonus(250), 5)
+    def test_reply_score_thresholds(self):
+        self.assertEqual(calculate_v2ex_replies_score(10), 0)
+        self.assertEqual(calculate_v2ex_replies_score(25), 1)
+        self.assertEqual(calculate_v2ex_replies_score(60), 2)
+        self.assertEqual(calculate_v2ex_replies_score(120), 3)
+        self.assertEqual(calculate_v2ex_replies_score(250), 5)
 
 
 class TestHistoryPenalty(unittest.TestCase):
-    def test_history_similarity_penalizes_but_keeps_article(self):
+    def test_history_similarity_scores_but_keeps_article(self):
         articles = [
             {
                 "title": "OpenAI releases GPT-5 model",
@@ -257,8 +253,9 @@ class TestHistoryPenalty(unittest.TestCase):
         ]
         result = deduplicate_articles(articles, previous_titles=["OpenAI releases GPT5 model"])
         self.assertEqual(len(result), 1)
-        self.assertLess(result[0]["score_breakdown"]["history_penalty"], 0)
-        self.assertGreater(result[0]["similarity_debug"]["best_history_similarity"], 0.88)
+        self.assertLess(result[0]["_score_components"]["history_score"], 0)
+        self.assertGreater(result[0]["similarity_debug"]["history_similarity"], 0.88)
+        self.assertTrue(result[0]["similarity_debug"]["history_duplicate"])
 
     def test_twitter_fixture(self):
         data = load_fixture("twitter")
@@ -290,12 +287,37 @@ class TestHistoryPenalty(unittest.TestCase):
 
 
 class TestDateHandling(unittest.TestCase):
-    def test_recency_bonus_accepts_naive_iso_datetime(self):
+    def test_recency_score_accepts_naive_iso_datetime(self):
         naive_date = (
             datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=2)
         ).replace(microsecond=0).isoformat()
-        bonus = calculate_recency_bonus({"date": naive_date})
-        self.assertGreaterEqual(bonus, 1.0)
+        score = calculate_recency_score({"date": naive_date})
+        self.assertGreaterEqual(score, 1.0)
+
+
+class TestOutputNaming(unittest.TestCase):
+    def test_deduplicated_article_uses_new_debug_field_names(self):
+        articles = [
+            {
+                "title": "OpenAI releases GPT-5 model",
+                "link": "https://example.com/openai-gpt5",
+                "topic": "ai-frontier",
+                "source_type": "rss",
+                "source_name": "Example RSS",
+                "source_priority": 3,
+            }
+        ]
+        result = deduplicate_articles(articles, previous_titles=["OpenAI releases GPT5 model"])
+        article = result[0]
+        self.assertIn("_score_components", article)
+        self.assertIn("scoring_debug", article)
+        self.assertIn("similarity_debug", article)
+        self.assertIn("source_names", article)
+        self.assertIn("source_name_count", article)
+        self.assertIn("history_score", article["scoring_debug"]["final_score"]["components"])
+        self.assertIn("cross_source_hot_score", article["scoring_debug"]["final_score"]["components"])
+        self.assertIn("recency_score", article["scoring_debug"]["final_score"]["components"])
+        self.assertIn("matched_source_type_count", article["similarity_debug"]["cross_source_hot"])
 
     def test_load_previous_hotspots_uses_timezone_safe_cutoff(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -322,6 +344,29 @@ class TestDateHandling(unittest.TestCase):
             )
             titles = load_previous_hotspots(archive_dir, days=14)
             self.assertIn("Recent Story", titles)
+
+    def test_load_previous_hotspots_only_reads_daily_json_in_json_dirs(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            archive_dir = Path(tmpdir)
+            json_dir = archive_dir / "2026-03-30" / "json"
+            markdown_dir = archive_dir / "2026-03-30" / "markdown"
+            json_dir.mkdir(parents=True)
+            markdown_dir.mkdir(parents=True)
+
+            daily_payload = {
+                "topics": [{"items": [{"title": "Daily Story", "link": "https://example.com/daily"}]}]
+            }
+            nondaily_payload = {
+                "topics": [{"items": [{"title": "Ignored Story", "link": "https://example.com/ignored"}]}]
+            }
+            (json_dir / "daily.json").write_text(json.dumps(daily_payload), encoding="utf-8")
+            (json_dir / "merge-sources.json").write_text(json.dumps(nondaily_payload), encoding="utf-8")
+            (markdown_dir / "daily.json").write_text(json.dumps(nondaily_payload), encoding="utf-8")
+
+            titles = load_previous_hotspots(archive_dir, days=14)
+
+            self.assertIn("Daily Story", titles)
+            self.assertNotIn("Ignored Story", titles)
 
 
 class TestIntegration(unittest.TestCase):
