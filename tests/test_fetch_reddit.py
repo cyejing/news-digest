@@ -55,7 +55,6 @@ class TestFetchReddit(unittest.TestCase):
         source = {
             "id": "reddit-openai-search",
             "query": "OpenAI",
-            "subreddit": "OpenAI",
             "sort": "top",
             "time": "week",
             "limit": 10,
@@ -64,7 +63,7 @@ class TestFetchReddit(unittest.TestCase):
             fetch_reddit.fetch_search_source(source, hours=48)
 
         run_mock.assert_called_once_with(
-            ["reddit/search", "OpenAI", "OpenAI", "--sort", "top", "--time", "week", "10"]
+            ["reddit/search", "OpenAI", "--sort", "top", "--time", "week", "--count", "10"]
         )
 
     def test_fetch_hot_source_uses_hot_command(self):
@@ -101,7 +100,9 @@ class TestFetchReddit(unittest.TestCase):
 
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["count"], 1)
-        run_mock.assert_any_call(["reddit/search", 'OpenAI -tutorial', "--sort", "top", "--time", "week", "2"])
+        self.assertEqual(len(result["request_timings"]), 2)
+        self.assertIn("timed_request", result["query_stats"][0]["timing_keywords"])
+        run_mock.assert_any_call(["reddit/search", 'OpenAI -tutorial', "--sort", "top", "--time", "week", "--count", "2"])
 
     def test_parse_post_accepts_topic_id_string(self):
         article = fetch_reddit.parse_post(
@@ -120,6 +121,29 @@ class TestFetchReddit(unittest.TestCase):
         )
         self.assertEqual(article["topic"], "ai-frontier")
         self.assertEqual(article["reddit_query"], "OpenAI")
+
+    def test_fetch_source_adds_request_timing_fields(self):
+        source = {"id": "reddit-openai", "subreddit": "OpenAI", "topic": "ai-frontier", "limit": 5}
+        payload = {
+            "items": [
+                {
+                    "title": "OpenAI ships something",
+                    "url": "https://example.com/article",
+                    "permalink": "/r/OpenAI/comments/abc/openai_ships_something/",
+                    "created_utc": 1774577508,
+                    "score": 80,
+                    "num_comments": 12,
+                    "selftext": "summary",
+                }
+            ]
+        }
+        with patch.object(fetch_reddit, "run_bb_browser_site", return_value=payload):
+            result = fetch_reddit.fetch_source(source, hours=48)
+
+        self.assertEqual(result["status"], "ok")
+        self.assertIn("elapsed_s", result)
+        self.assertIn("timed_request", result["timing_keywords"])
+        self.assertEqual(result["request_timing_summary"]["requests_total"], 1)
 
 
 if __name__ == "__main__":

@@ -20,9 +20,11 @@ from typing import Any, Dict, List, Optional, Sequence
 
 try:
     from config_loader import load_merged_sources, load_merged_topics
+    from fetch_timing import build_request_trace, summarize_request_traces
 except ImportError:
     sys.path.append(str(Path(__file__).parent))
     from config_loader import load_merged_sources, load_merged_topics
+    from fetch_timing import build_request_trace, summarize_request_traces
 
 try:
     from topic_utils import get_source_topic
@@ -32,7 +34,7 @@ except ImportError:
 
 COOLDOWN_SECONDS = float(os.environ.get("BB_BROWSER_REDDIT_COOLDOWN_SECONDS", "6.0"))
 DEFAULT_TIMEOUT = 180
-DEFAULT_RESULTS_PER_QUERY = 5
+DEFAULT_RESULTS_PER_QUERY = 10
 MAX_RESULTS_PER_QUERY = 20
 _last_success_at: Optional[float] = None
 
@@ -219,16 +221,14 @@ def fetch_search_source(source: Dict[str, Any], hours: int) -> List[Dict[str, An
     sort = source.get("sort", "relevance") or "relevance"
     time_filter = source.get("time") or hours_to_reddit_time(hours)
 
-    args = ["reddit/search", str(query)]
-    if source.get("subreddit"):
-        args.append(str(source["subreddit"]))
-    args.extend(["--sort", str(sort), "--time", str(time_filter), str(limit)])
+    args = ["reddit/search", str(query), "--sort", str(sort), "--time", str(time_filter), "--count", str(limit)]
     payload = run_bb_browser_site(args)
     return extract_posts(payload)
 
 
 def fetch_source(source: Dict[str, Any], hours: int) -> Dict[str, Any]:
     mode = source_mode(source)
+    started_at = time.monotonic()
     try:
         raw_posts = fetch_search_source(source, hours) if mode == "search" else fetch_hot_source(source)
         articles = []
@@ -236,6 +236,14 @@ def fetch_source(source: Dict[str, Any], hours: int) -> Dict[str, Any]:
             article = parse_post(item, get_source_topic(source), int(source.get("min_score", 0) or 0), source.get("query") or source.get("search_query"))
             if article:
                 articles.append(article)
+        elapsed_s = time.monotonic() - started_at
+        request_trace = build_request_trace(
+            source.get("query") or source.get("subreddit") or source.get("id", "unknown"),
+            elapsed_s,
+            status="ok",
+            backend="bb-browser",
+            adapter="reddit/search" if mode == "search" else "reddit/hot",
+        )
 
         return {
             "source_id": source.get("id"),
@@ -249,11 +257,24 @@ def fetch_source(source: Dict[str, Any], hours: int) -> Dict[str, Any]:
             "topic": get_source_topic(source),
             "status": "ok",
             "attempts": 1,
+            "elapsed_s": round(elapsed_s, 3),
+            "timing_keywords": request_trace["timing_keywords"],
             "items": len(articles),
             "count": len(articles),
             "articles": articles,
+            "request_timings": [request_trace],
+            "request_timing_summary": summarize_request_traces([request_trace]),
         }
     except Exception as exc:
+        elapsed_s = time.monotonic() - started_at
+        request_trace = build_request_trace(
+            source.get("query") or source.get("subreddit") or source.get("id", "unknown"),
+            elapsed_s,
+            status="error",
+            backend="bb-browser",
+            adapter="reddit/search" if mode == "search" else "reddit/hot",
+            error=str(exc)[:200],
+        )
         return {
             "source_id": source.get("id"),
             "source_type": "reddit",
@@ -267,9 +288,13 @@ def fetch_source(source: Dict[str, Any], hours: int) -> Dict[str, Any]:
             "status": "error",
             "attempts": 1,
             "error": str(exc)[:200],
+            "elapsed_s": round(elapsed_s, 3),
+            "timing_keywords": request_trace["timing_keywords"],
             "items": 0,
             "count": 0,
             "articles": [],
+            "request_timings": [request_trace],
+            "request_timing_summary": summarize_request_traces([request_trace]),
         }
 
 
@@ -282,11 +307,14 @@ def fetch_topic(topic: Dict[str, Any], hours: int, logger: logging.Logger) -> Di
 
     query_stats = []
     dedup_by_url: Dict[str, Dict[str, Any]] = {}
+    request_timings: List[Dict[str, Any]] = []
+    started_at = time.monotonic()
 
     for query in queries:
         compiled_query = " ".join([query] + [f'-"{term}"' if " " in term else f"-{term}" for term in exclude if str(term).strip()])
+        query_started_at = time.monotonic()
         try:
-            payload = run_bb_browser_site(["reddit/search", compiled_query, "--sort", "top", "--time", time_filter, str(per_query)])
+            payload = run_bb_browser_site(["reddit/search", compiled_query, "--sort", "top", "--time", time_filter, "--count", str(per_query)])
             posts = extract_posts(payload)
             kept = 0
             for item in posts:
@@ -295,10 +323,14 @@ def fetch_topic(topic: Dict[str, Any], hours: int, logger: logging.Logger) -> Di
                     continue
                 dedup_by_url.setdefault(article["link"], article)
                 kept += 1
-            query_stats.append({"query": compiled_query, "status": "ok", "count": kept})
+            elapsed_s = time.monotonic() - query_started_at
+            request_timings.append(build_request_trace(compiled_query, elapsed_s, status="ok", backend="bb-browser", adapter="reddit/search"))
+            query_stats.append({"query": compiled_query, "status": "ok", "count": kept, "elapsed_s": round(elapsed_s, 3), "timing_keywords": request_timings[-1]["timing_keywords"]})
         except Exception as exc:
             logger.warning("Reddit query failed [%s]: %s", topic.get("id"), exc)
-            query_stats.append({"query": compiled_query, "status": "error", "count": 0, "error": str(exc)[:200]})
+            elapsed_s = time.monotonic() - query_started_at
+            request_timings.append(build_request_trace(compiled_query, elapsed_s, status="error", backend="bb-browser", adapter="reddit/search", error=str(exc)[:200]))
+            query_stats.append({"query": compiled_query, "status": "error", "count": 0, "error": str(exc)[:200], "elapsed_s": round(elapsed_s, 3), "timing_keywords": request_timings[-1]["timing_keywords"]})
 
     articles = list(dedup_by_url.values())
     articles.sort(key=lambda article: article.get("score", 0), reverse=True)
@@ -308,7 +340,10 @@ def fetch_topic(topic: Dict[str, Any], hours: int, logger: logging.Logger) -> Di
         "status": "ok" if articles else "error",
         "queries_executed": len(queries),
         "queries_ok": ok_queries,
+        "elapsed_s": round(time.monotonic() - started_at, 3),
         "query_stats": query_stats,
+        "request_timings": request_timings,
+        "request_timing_summary": summarize_request_traces(request_timings),
         "items": len(articles),
         "count": len(articles),
         "articles": articles,
@@ -368,6 +403,12 @@ def main() -> int:
         total_posts = sum(result.get("count", 0) for result in source_results) + sum(result.get("count", 0) for result in topic_results)
         total_calls = len(source_results) + total_query_calls
         ok_calls = ok_sources + ok_query_calls
+        all_request_timings = [
+            trace
+            for result in [*source_results, *topic_results]
+            for trace in result.get("request_timings", [])
+            if isinstance(trace, dict)
+        ]
 
         output = {
             "generated": datetime.now(timezone.utc).isoformat(),
@@ -389,6 +430,7 @@ def main() -> int:
             "queries_ok": ok_query_calls,
             "total_articles": total_posts,
             "total_posts": total_posts,
+            "request_timing_summary": summarize_request_traces(all_request_timings),
             "sources": source_results,
             "topics": topic_results,
             "subreddits_total": len(source_results),

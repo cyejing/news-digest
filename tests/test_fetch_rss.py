@@ -5,6 +5,7 @@ import importlib.util
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 SCRIPTS_DIR = Path(__file__).parent.parent / "scripts"
 MODULE_PATH = SCRIPTS_DIR / "fetch-rss.py"
@@ -70,6 +71,51 @@ class TestFeedParsing(unittest.TestCase):
 
     def test_non_feed_is_rejected(self):
         self.assertFalse(fetch_rss.is_probably_feed("<html><body>blocked</body></html>", "text/html"))
+
+    def test_fetch_feed_with_retry_records_request_timing(self):
+        source = {
+            "id": "example-rss",
+            "name": "Example RSS",
+            "url": "https://example.com/feed.xml",
+            "topic": "technology",
+            "priority": 3,
+        }
+        rss_content = """<?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0">
+          <channel>
+            <item>
+              <title>RSS Title</title>
+              <link>https://example.com/post-1</link>
+              <pubDate>Fri, 27 Mar 2026 10:00:00 +0000</pubDate>
+            </item>
+          </channel>
+        </rss>
+        """
+
+        class FakeResponse:
+            def __init__(self, content: str):
+                self._content = content
+                self.headers = {}
+                self.url = "https://example.com/feed.xml"
+
+            def read(self):
+                return self._content.encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        with patch.object(fetch_rss, "fetch_with_redirects", return_value=FakeResponse(rss_content)):
+            with patch.object(fetch_rss, "_rss_cache", {}):
+                result = fetch_rss.fetch_feed_with_retry(source, self.cutoff)
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["count"], 1)
+        self.assertIn("elapsed_s", result)
+        self.assertEqual(result["request_timing_summary"]["requests_total"], 1)
+        self.assertIn("timed_request", result["request_timings"][0]["timing_keywords"])
 
 
 if __name__ == "__main__":

@@ -236,6 +236,25 @@ class TestRunPipeline(unittest.TestCase):
         self.assertEqual(meta.call_stats["failed_calls"], 1)
         self.assertTrue(meta.failed_items[0]["error"].startswith("[error] site google/news: Error: Timed out loading Google news results"))
 
+    def test_build_diagnostics_keeps_all_failed_items_for_step_meta(self):
+        payload = {
+            "sources": [
+                {"source_id": f"rss-{index}", "status": "error", "error": f"failure {index}"}
+                for index in range(12)
+            ]
+        }
+        result = run_pipeline.make_process_result(
+            spec=run_pipeline.StepSpec("rss", "RSS", "fetch-rss.py", [], None),
+            status="ok",
+            timeout=300,
+        )
+
+        meta = run_pipeline.build_diagnostics(payload, result, "rss")
+
+        self.assertEqual(meta.call_stats["failed_calls"], 12)
+        self.assertEqual(len(meta.failed_items), 12)
+        self.assertEqual(meta.failed_items[-1], {"id": "rss-11", "error": "failure 11"})
+
     def test_build_diagnostics_uses_step_aggregate_failure_when_payload_has_no_items(self):
         result = run_pipeline.make_process_result(
             spec=run_pipeline.StepSpec("merge-sources", "Merge", "merge-sources.py", [], None),

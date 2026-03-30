@@ -82,6 +82,9 @@ class TestFetchTwitter(unittest.TestCase):
 
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["count"], 1)
+        self.assertIn("elapsed_s", result)
+        self.assertEqual(result["request_timing_summary"]["requests_total"], 1)
+        self.assertIn("timed_request", result["timing_keywords"])
         run_mock.assert_called_once_with(["twitter/tweets", "tesla", "5"])
 
     def test_extract_tweets_supports_items_payload(self):
@@ -122,6 +125,8 @@ class TestFetchTwitter(unittest.TestCase):
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["count"], 1)
         self.assertEqual(result["queries_ok"], 2)
+        self.assertEqual(len(result["request_timings"]), 2)
+        self.assertIn("timed_request", result["query_stats"][0]["timing_keywords"])
         run_mock.assert_any_call(["twitter/search", "Tesla -rumor", "2", "latest"])
         run_mock.assert_any_call(["twitter/search", "robotics -rumor", "2", "latest"])
 

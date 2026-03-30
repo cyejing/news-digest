@@ -21,7 +21,7 @@ class TestFetchApi(unittest.TestCase):
         self.assertIn("hacker-news-api", ids)
 
     def test_fetch_hacker_news_builds_story_articles(self):
-        def fake_http_get_json(url, headers=None, timeout=fetch_api.TIMEOUT):
+        def fake_http_get_json(url, headers=None, timeout=fetch_api.TIMEOUT, request_log=None):
             if url.endswith("/beststories.json"):
                 return [101, 102, 103]
             if url.endswith("/item/101.json"):
@@ -78,6 +78,9 @@ class TestFetchApi(unittest.TestCase):
 
         self.assertEqual(result["topic"], "technology")
         self.assertEqual(result["articles"][0]["topic"], "technology")
+        self.assertIn("elapsed_s", result)
+        self.assertIn("request_timings", result)
+        self.assertIn("request_timing_summary", result)
 
 
 if __name__ == "__main__":

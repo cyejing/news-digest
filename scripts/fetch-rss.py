@@ -30,9 +30,11 @@ from xml.etree import ElementTree as ET
 from email.utils import parsedate_to_datetime
 
 try:
+    from fetch_timing import build_request_trace, summarize_request_traces
     from topic_utils import get_source_topic
 except ImportError:
     sys.path.append(str(Path(__file__).parent))
+    from fetch_timing import build_request_trace, summarize_request_traces
     from topic_utils import get_source_topic
 
 
@@ -399,10 +401,13 @@ def fetch_feed_with_retry(source: Dict[str, Any], cutoff: datetime, no_cache: bo
     url = source["url"]
     priority = normalize_priority(source.get("priority"))
     topic = get_source_topic(source)
+    request_log: List[Dict[str, Any]] = []
+    started_at = time.monotonic()
     
     global _rss_cache, _rss_cache_dirty
     
     for attempt in range(RETRY_COUNT + 1):
+        request_started_at = time.monotonic()
         try:
             req_headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"}
             
@@ -437,6 +442,16 @@ def fetch_feed_with_retry(source: Dict[str, Any], cutoff: datetime, no_cache: bo
             except URLError as e:
                 if hasattr(e, 'code') and e.code == 304:
                     logging.info(f"⏭ {name}: not modified (304)")
+                    request_log.append(
+                        build_request_trace(
+                            url,
+                            time.monotonic() - request_started_at,
+                            status="ok",
+                            method="GET",
+                            attempt=attempt + 1,
+                            result="not_modified",
+                        )
+                    )
                     return {
                         "source_id": source_id,
                         "source_type": "rss",
@@ -446,11 +461,24 @@ def fetch_feed_with_retry(source: Dict[str, Any], cutoff: datetime, no_cache: bo
                         "topic": topic,
                         "status": "ok",
                         "attempts": attempt + 1,
+                        "elapsed_s": round(time.monotonic() - started_at, 3),
                         "not_modified": True,
+                        "items": 0,
                         "count": 0,
                         "articles": [],
+                        "request_timings": request_log,
+                        "request_timing_summary": summarize_request_traces(request_log),
                     }
                 raise
+            request_log.append(
+                build_request_trace(
+                    url,
+                    time.monotonic() - request_started_at,
+                    status="ok",
+                    method="GET",
+                    attempt=attempt + 1,
+                )
+            )
                 
             articles = parse_feed(content, cutoff, final_url)
             
@@ -471,15 +499,28 @@ def fetch_feed_with_retry(source: Dict[str, Any], cutoff: datetime, no_cache: bo
                 "url": url,
                 "priority": priority,
                 "topic": topic,
-                        "status": "ok",
-                        "attempts": attempt + 1,
-                        "items": len(articles),
-                        "count": len(articles),
-                        "articles": articles,
-                    }
+                "status": "ok",
+                "attempts": attempt + 1,
+                "elapsed_s": round(time.monotonic() - started_at, 3),
+                "items": len(articles),
+                "count": len(articles),
+                "articles": articles,
+                "request_timings": request_log,
+                "request_timing_summary": summarize_request_traces(request_log),
+            }
             
         except Exception as e:
             error_msg = str(e)[:100]
+            request_log.append(
+                build_request_trace(
+                    url,
+                    time.monotonic() - request_started_at,
+                    status="error",
+                    method="GET",
+                    attempt=attempt + 1,
+                    error=error_msg,
+                )
+            )
             logging.debug(f"Attempt {attempt + 1} failed for {name}: {error_msg}")
             
             if attempt < RETRY_COUNT:
@@ -496,9 +537,12 @@ def fetch_feed_with_retry(source: Dict[str, Any], cutoff: datetime, no_cache: bo
                     "status": "error",
                     "attempts": attempt + 1,
                     "error": error_msg,
+                    "elapsed_s": round(time.monotonic() - started_at, 3),
                     "items": 0,
                     "count": 0,
                     "articles": [],
+                    "request_timings": request_log,
+                    "request_timing_summary": summarize_request_traces(request_log),
                 }
 
 
@@ -611,6 +655,7 @@ def main():
 
         ok_count = sum(1 for r in results if r["status"] == "ok")
         total_articles = sum(r.get("count", 0) for r in results)
+        all_request_timings = [trace for result in results for trace in result.get("request_timings", []) if isinstance(trace, dict)]
 
         output = {
             "generated": datetime.now(timezone.utc).isoformat(),
@@ -626,6 +671,7 @@ def main():
             "sources_total": len(results),
             "sources_ok": ok_count,
             "total_articles": total_articles,
+            "request_timing_summary": summarize_request_traces(all_request_timings),
             "sources": results,
         }
 

@@ -396,7 +396,7 @@ def extract_call_stats(payload: Optional[Dict[str, Any]], *, step_key: str, stat
     return single_call(step_key)
 
 
-def extract_failed_items(payload: Optional[Dict[str, Any]], limit: int = 10) -> List[Dict[str, str]]:
+def extract_failed_items(payload: Optional[Dict[str, Any]], limit: Optional[int] = None) -> List[Dict[str, str]]:
     if not payload:
         return []
 
@@ -446,7 +446,7 @@ def extract_failed_items(payload: Optional[Dict[str, Any]], limit: int = 10) -> 
                         continue
                     topic_query_failures = True
                     append_item(entry_id or entry.get("topic_id") or entry.get("topic"), query_stat.get("error") or query_stat.get("query"))
-                    if len(failed_items) >= limit:
+                    if limit is not None and len(failed_items) >= limit:
                         return failed_items[:limit]
                 if status == "ok" and topic_query_failures:
                     continue
@@ -455,10 +455,10 @@ def extract_failed_items(payload: Optional[Dict[str, Any]], limit: int = 10) -> 
             elif isinstance(error_messages, list) and error_messages:
                 first_message = next((item for item in error_messages if normalize_error_text(item)), None)
                 append_item(entry_id, first_message)
-            if len(failed_items) >= limit:
+            if limit is not None and len(failed_items) >= limit:
                 return failed_items[:limit]
 
-    return failed_items[:limit]
+    return failed_items if limit is None else failed_items[:limit]
 
 
 def build_diagnostics(payload: Optional[Dict[str, Any]], process_result: ProcessResult, step_key: str) -> StepMeta:

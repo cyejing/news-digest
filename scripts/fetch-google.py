@@ -21,13 +21,15 @@ from typing import Any, Dict, List, Optional, Sequence
 
 try:
     from config_loader import load_merged_topics
+    from fetch_timing import build_request_trace, summarize_request_traces
 except ImportError:
     sys.path.append(str(Path(__file__).parent))
     from config_loader import load_merged_topics
+    from fetch_timing import build_request_trace, summarize_request_traces
 
 COOLDOWN_SECONDS = float(os.environ.get("BB_BROWSER_GOOGLE_COOLDOWN_SECONDS", "12.0"))
 DEFAULT_TIMEOUT = 180
-DEFAULT_RESULTS_PER_QUERY = 5
+DEFAULT_RESULTS_PER_QUERY = 10
 MAX_RESULTS_PER_QUERY = 10
 _last_success_at: Optional[float] = None
 
@@ -112,9 +114,12 @@ def fetch_topic(topic: Dict[str, Any], logger: logging.Logger) -> Dict[str, Any]
 
     query_stats = []
     dedup_by_url: Dict[str, Dict[str, Any]] = {}
+    request_timings: List[Dict[str, Any]] = []
+    started_at = time.monotonic()
 
     for query in queries:
         compiled_query = build_google_query(query, exclude)
+        query_started_at = time.monotonic()
         try:
             payload = run_bb_browser_site(["google/news", compiled_query, str(per_query)])
             results = payload.get("results", [])
@@ -136,10 +141,14 @@ def fetch_topic(topic: Dict[str, Any], logger: logging.Logger) -> Dict[str, Any]
                     continue
                 dedup_by_url.setdefault(article["link"], article)
                 kept += 1
-            query_stats.append({"query": compiled_query, "status": "ok", "count": kept})
+            elapsed_s = time.monotonic() - query_started_at
+            request_timings.append(build_request_trace(compiled_query, elapsed_s, status="ok", backend="bb-browser", adapter="google/news"))
+            query_stats.append({"query": compiled_query, "status": "ok", "count": kept, "elapsed_s": round(elapsed_s, 3), "timing_keywords": request_timings[-1]["timing_keywords"]})
         except Exception as exc:
             logger.warning("Google News query failed [%s]: %s", topic.get("id"), exc)
-            query_stats.append({"query": compiled_query, "status": "error", "count": 0, "error": str(exc)[:200]})
+            elapsed_s = time.monotonic() - query_started_at
+            request_timings.append(build_request_trace(compiled_query, elapsed_s, status="error", backend="bb-browser", adapter="google/news", error=str(exc)[:200]))
+            query_stats.append({"query": compiled_query, "status": "error", "count": 0, "error": str(exc)[:200], "elapsed_s": round(elapsed_s, 3), "timing_keywords": request_timings[-1]["timing_keywords"]})
 
     articles = list(dedup_by_url.values())
     articles.sort(key=lambda article: article.get("date", ""), reverse=True)
@@ -149,7 +158,10 @@ def fetch_topic(topic: Dict[str, Any], logger: logging.Logger) -> Dict[str, Any]
         "status": "ok" if articles else "error",
         "queries_executed": len(queries),
         "queries_ok": ok_queries,
+        "elapsed_s": round(time.monotonic() - started_at, 3),
         "query_stats": query_stats,
+        "request_timings": request_timings,
+        "request_timing_summary": summarize_request_traces(request_timings),
         "items": len(articles),
         "count": len(articles),
         "articles": articles,
@@ -197,6 +209,7 @@ def main() -> int:
             for stat in result.get("query_stats", [])
             if isinstance(stat, dict) and stat.get("status") == "ok"
         )
+        all_request_timings = [trace for result in topic_results for trace in result.get("request_timings", []) if isinstance(trace, dict)]
         output = {
             "generated": datetime.now(timezone.utc).isoformat(),
             "source_type": "google",
@@ -211,6 +224,7 @@ def main() -> int:
             "topics_total": len(topic_results),
             "topics_ok": ok_topics,
             "total_articles": total_articles,
+            "request_timing_summary": summarize_request_traces(all_request_timings),
             "topics": topic_results,
         }
         with open(args.output, "w", encoding="utf-8") as handle:

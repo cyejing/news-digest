@@ -67,6 +67,8 @@ class TestFetchZhihu(unittest.TestCase):
 
         run_mock.assert_called_once_with(["zhihu/hot", "12"])
         self.assertEqual(data["source_type"], "zhihu")
+        self.assertEqual(data["request_timing_summary"]["requests_total"], 1)
+        self.assertIn("timed_request", data["sources"][0]["timing_keywords"])
 
     def test_run_bb_browser_site_parses_json_and_updates_cooldown(self):
         completed = MagicMock(returncode=0, stdout='{"items": []}', stderr="")

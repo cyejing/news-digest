@@ -23,10 +23,12 @@ from typing import Any, Dict, List, Optional, Sequence
 
 try:
     from config_loader import load_merged_topic_rules
+    from fetch_timing import build_request_trace, summarize_request_traces
     from topic_utils import resolve_primary_topic
 except ImportError:
     sys.path.append(str(Path(__file__).parent))
     from config_loader import load_merged_topic_rules
+    from fetch_timing import build_request_trace, summarize_request_traces
     from topic_utils import resolve_primary_topic
 
 SOURCE_ID = "zhihu-hot"
@@ -430,7 +432,10 @@ def fetch_zhihu_hot(
     limit: int = DEFAULT_LIMIT,
 ) -> Dict[str, Any]:
     logger.info("Zhihu bb-browser cooldown: %.1fs", COOLDOWN_SECONDS)
+    started_at = time.monotonic()
     payload = run_bb_browser_site(["zhihu/hot", str(limit)])
+    elapsed_s = time.monotonic() - started_at
+    request_trace = build_request_trace("zhihu/hot", elapsed_s, status="ok", backend="bb-browser", adapter="zhihu/hot")
     raw_items = extract_hot_items(payload)
     effective_defaults_dir = defaults_dir or Path("config/defaults")
     topic_rules = load_merged_topic_rules(effective_defaults_dir, config_dir)
@@ -450,10 +455,14 @@ def fetch_zhihu_hot(
         "priority": SOURCE_PRIORITY,
         "topic": resolve_primary_topic([article.get("topic") for article in articles], rules=topic_rules),
         "status": "ok" if articles else "error",
+        "elapsed_s": round(elapsed_s, 3),
+        "timing_keywords": request_trace["timing_keywords"],
         "items": len(articles),
         "count": len(articles),
         "fetched_count": len(raw_items),
         "articles": articles,
+        "request_timings": [request_trace],
+        "request_timing_summary": summarize_request_traces([request_trace]),
     }
     if not articles:
         source_result["error"] = "No tech-relevant Zhihu hot topics found"
@@ -467,6 +476,7 @@ def fetch_zhihu_hot(
         "sources_total": 1,
         "sources_ok": 1 if articles else 0,
         "total_articles": len(articles),
+        "request_timing_summary": summarize_request_traces([request_trace]),
         "sources": [source_result],
     }
 

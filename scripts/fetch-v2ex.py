@@ -35,7 +35,7 @@ except ImportError:
 SOURCE_ID = "v2ex-api"
 SOURCE_NAME = "V2EX Hot"
 SOURCE_PRIORITY = 4
-DEFAULT_TIMEOUT = 90
+DEFAULT_TIMEOUT = 60
 COOLDOWN_SECONDS = float(os.environ.get("BB_BROWSER_V2EX_COOLDOWN_SECONDS", "5.0"))
 
 _last_success_at: Optional[float] = None

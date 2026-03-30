@@ -46,6 +46,9 @@ class TestFetchGoogle(unittest.TestCase):
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["count"], 1)
         self.assertEqual(result["queries_ok"], 2)
+        self.assertIn("elapsed_s", result)
+        self.assertEqual(len(result["request_timings"]), 2)
+        self.assertIn("timed_request", result["query_stats"][0]["timing_keywords"])
         run_mock.assert_any_call(
             ["google/news", "OpenAI -tutorial", "2"]
         )

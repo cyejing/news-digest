@@ -28,11 +28,13 @@ from typing import Dict, List, Any, Optional
 
 try:
     from config_loader import load_merged_api_sources, load_merged_topic_rules
+    from fetch_timing import build_request_trace, summarize_request_traces
     from topic_utils import get_source_topic
 except ImportError:
     import sys
     sys.path.append(str(Path(__file__).parent))
     from config_loader import load_merged_api_sources, load_merged_topic_rules
+    from fetch_timing import build_request_trace, summarize_request_traces
     from topic_utils import get_source_topic
 
 try:
@@ -99,31 +101,45 @@ def apply_host_cooldown(url: str) -> None:
         time.sleep(wait_time)
 
 
-def http_get_json(url: str, headers: Dict[str, str] = None, timeout: int = TIMEOUT) -> Dict:
+def http_get_json(
+    url: str,
+    headers: Dict[str, str] = None,
+    timeout: int = TIMEOUT,
+    request_log: Optional[List[Dict[str, Any]]] = None,
+) -> Dict:
     """HTTP GET JSON response."""
     req_headers = {"User-Agent": UA}
     if headers:
         req_headers.update(headers)
 
     apply_host_cooldown(url)
-    
-    if HAS_REQUESTS:
-        resp = requests.get(url, headers=req_headers, timeout=timeout)
-        resp.raise_for_status()
-        return resp.json()
-    else:
-        opener = build_opener(RedirectHandler308)
-        req = Request(url, headers=req_headers)
-        with opener.open(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode("utf-8", errors="replace"))
+
+    started_at = time.monotonic()
+    try:
+        if HAS_REQUESTS:
+            resp = requests.get(url, headers=req_headers, timeout=timeout)
+            resp.raise_for_status()
+            payload = resp.json()
+        else:
+            opener = build_opener(RedirectHandler308)
+            req = Request(url, headers=req_headers)
+            with opener.open(req, timeout=timeout) as resp:
+                payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+        if request_log is not None:
+            request_log.append(build_request_trace(url, time.monotonic() - started_at, status="ok", method="GET"))
+        return payload
+    except Exception:
+        if request_log is not None:
+            request_log.append(build_request_trace(url, time.monotonic() - started_at, status="error", method="GET"))
+        raise
 
 
-def fetch_weibo(limit: int = 15) -> List[Dict[str, Any]]:
+def fetch_weibo(limit: int = 15, request_log: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
     """Fetch Weibo hot search via API."""
     articles = []
     try:
         headers = {"Referer": "https://weibo.com/"}
-        data = http_get_json("https://weibo.com/ajax/side/hotSearch", headers=headers)
+        data = http_get_json("https://weibo.com/ajax/side/hotSearch", headers=headers, request_log=request_log)
         
         items = data.get('data', {}).get('realtime', [])
         
@@ -150,12 +166,12 @@ def fetch_weibo(limit: int = 15) -> List[Dict[str, Any]]:
     return articles
 
 
-def fetch_wallstreetcn(limit: int = 15) -> List[Dict[str, Any]]:
+def fetch_wallstreetcn(limit: int = 15, request_log: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
     """Fetch WallStreetCN news via API."""
     articles = []
     try:
         url = "https://api-one.wallstcn.com/apiv1/content/information-flow?channel=global-channel&accept=article&limit=30"
-        data = http_get_json(url)
+        data = http_get_json(url, request_log=request_log)
         
         for item in data.get('data', {}).get('items', [])[:limit]:
             res = item.get('resource')
@@ -177,13 +193,13 @@ def fetch_wallstreetcn(limit: int = 15) -> List[Dict[str, Any]]:
     return articles
 
 
-def fetch_tencent(limit: int = 15) -> List[Dict[str, Any]]:
+def fetch_tencent(limit: int = 15, request_log: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
     """Fetch Tencent News via API."""
     articles = []
     try:
         headers = {"Referer": "https://news.qq.com/"}
         url = "https://i.news.qq.com/web_backend/v2/getTagInfo?tagId=aEWqxLtdgmQ%3D"
-        data = http_get_json(url, headers=headers)
+        data = http_get_json(url, headers=headers, request_log=request_log)
         
         for news in data.get('data', {}).get('tabs', [{}])[0].get('articleList', [])[:limit]:
             articles.append({
@@ -200,17 +216,19 @@ def fetch_tencent(limit: int = 15) -> List[Dict[str, Any]]:
     return articles
 
 
-def fetch_hacker_news(limit: int = 15) -> List[Dict[str, Any]]:
+def fetch_hacker_news(limit: int = 15, request_log: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
     """Fetch Hacker News best stories via official Firebase API."""
     articles = []
     try:
         story_ids = http_get_json(
-            "https://hacker-news.firebaseio.com/v0/beststories.json"
+            "https://hacker-news.firebaseio.com/v0/beststories.json",
+            request_log=request_log,
         ) or []
 
         for story_id in story_ids[: max(limit * 3, limit)]:
             item = http_get_json(
-                f"https://hacker-news.firebaseio.com/v0/item/{story_id}.json"
+                f"https://hacker-news.firebaseio.com/v0/item/{story_id}.json",
+                request_log=request_log,
             )
             if not isinstance(item, dict):
                 continue
@@ -272,6 +290,8 @@ def fetch_source(source: Dict[str, Any], limit: int = 15, topic_rules: Optional[
     priority = normalize_priority(source.get("priority"))
     
     fetcher = API_SOURCE_FETCHERS.get(source_id)
+    request_log: List[Dict[str, Any]] = []
+    started_at = time.monotonic()
     if not fetcher:
         return {
             "source_id": source_id,
@@ -281,13 +301,16 @@ def fetch_source(source: Dict[str, Any], limit: int = 15, topic_rules: Optional[
             "topic": topic,
             "status": "error",
             "error": f"Unknown source: {source_id}",
+            "elapsed_s": round(time.monotonic() - started_at, 3),
             "items": 0,
             "count": 0,
             "articles": [],
+            "request_timings": request_log,
+            "request_timing_summary": summarize_request_traces(request_log),
         }
     
     try:
-        articles = fetcher(limit)
+        articles = fetcher(limit, request_log=request_log)
         
         for article in articles:
             article["topic"] = topic
@@ -299,9 +322,12 @@ def fetch_source(source: Dict[str, Any], limit: int = 15, topic_rules: Optional[
             "priority": priority,
             "topic": topic,
             "status": "ok",
+            "elapsed_s": round(time.monotonic() - started_at, 3),
             "items": len(articles),
             "count": len(articles),
             "articles": articles,
+            "request_timings": request_log,
+            "request_timing_summary": summarize_request_traces(request_log),
         }
     except Exception as e:
         return {
@@ -312,9 +338,12 @@ def fetch_source(source: Dict[str, Any], limit: int = 15, topic_rules: Optional[
             "topic": topic,
             "status": "error",
             "error": str(e)[:100],
+            "elapsed_s": round(time.monotonic() - started_at, 3),
             "items": 0,
             "count": 0,
             "articles": [],
+            "request_timings": request_log,
+            "request_timing_summary": summarize_request_traces(request_log),
         }
 
 def parse_args() -> argparse.Namespace:
@@ -368,6 +397,7 @@ def main() -> int:
         
         ok_count = sum(1 for r in results if r["status"] == "ok")
         total_articles = sum(r.get("count", 0) for r in results)
+        all_request_timings = [trace for result in results for trace in result.get("request_timings", []) if isinstance(trace, dict)]
         
         output = {
             "generated": datetime.now(timezone.utc).isoformat(),
@@ -381,6 +411,7 @@ def main() -> int:
             "sources_total": len(results),
             "sources_ok": ok_count,
             "total_articles": total_articles,
+            "request_timing_summary": summarize_request_traces(all_request_timings),
             "sources": results,
         }
         
