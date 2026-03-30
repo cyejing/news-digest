@@ -15,7 +15,6 @@
 
 - MODE = daily
 - RSS_HOURS = 48
-- EXTRA_SECTIONS = (无)
 - WORKSPACE = <你的工作区路径>
 - SKILL_DIR = <你的 skill 安装路径>
 - DATE = YYYY-MM-DD
@@ -29,7 +28,6 @@
 
 - MODE = weekly
 - RSS_HOURS = 168
-- EXTRA_SECTIONS = ## 每周趋势总结
 - WORKSPACE = <你的工作区路径>
 - SKILL_DIR = <你的 skill 安装路径>
 - DATE = YYYY-MM-DD

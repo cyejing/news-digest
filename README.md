@@ -110,6 +110,7 @@ pip install feedparser>=6.0.0 jsonschema>=4.0.0 requests>=2.28.0 beautifulsoup4>
 
 - `merge-hotspots.py` produces the final archived hotspots JSON and Markdown outputs.
 - The final user-facing output is a Markdown hotspots report.
+- The final user-facing Markdown includes the translated body plus a closing AI summary for both daily and weekly reports.
 - JSON hotspots are archived in `workspace/archive/news-hotspots/<DATE>/json/`.
 - User-facing Markdown is archived in `workspace/archive/news-hotspots/<DATE>/markdown/`.
 - Archived filenames use the selected mode, for example `daily.json`, `daily.md`, `weekly.json`, `weekly1.md`.

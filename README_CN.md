@@ -110,6 +110,7 @@ pip install feedparser>=6.0.0 jsonschema>=4.0.0 requests>=2.28.0 beautifulsoup4>
 
 - `merge-hotspots.py` 会生成并归档最终热点 JSON 和 Markdown。
 - 最终对用户输出的是 Markdown 热点报告。
+- 最终用户可见 Markdown 包含正文和结尾 AI 总结，日报和周报都适用。
 - JSON 热点归档到 `workspace/archive/news-hotspots/<DATE>/json/`。
 - 用户 Markdown 归档到 `workspace/archive/news-hotspots/<DATE>/markdown/`。
 - 归档文件名按 `mode` 命名，例如 `daily.json`、`daily.md`、`weekly.json`、`weekly1.md`。
