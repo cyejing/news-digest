@@ -3,20 +3,12 @@
 Configuration overlay loader for news-hotspots.
 
 Handles loading and merging of default configurations with optional user overlays.
-Supports sources.json, topics.json, and topic-rules.json overlays.
 """
 
 import json
 import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Any
-
-try:
-    from topic_utils import get_source_topic
-except ImportError:
-    import sys
-    sys.path.append(str(Path(__file__).parent))
-    from topic_utils import get_source_topic
 
 logger = logging.getLogger(__name__)
 
@@ -65,10 +57,7 @@ def flatten_sources_config(config_data: Dict[str, Any], source_name: str) -> Lis
                     normalized_type,
                 )
             normalized["type"] = normalized_type
-            topic = get_source_topic(normalized)
-            if topic:
-                normalized["topic"] = topic
-            normalized.pop("topics", None)
+            normalized["enabled"] = bool(normalized.get("enabled", True))
             flattened.append(normalized)
 
     return flattened
@@ -276,38 +265,6 @@ def load_merged_topics(defaults_dir: Path, config_dir: Optional[Path] = None) ->
     
     logger.info(f"Merged topics: {len(default_topics)} defaults + {len(user_topics)} user = {len(result)} total topics")
     return result
-
-
-def load_merged_topic_rules(defaults_dir: Path, config_dir: Optional[Path] = None) -> Dict[str, Any]:
-    """Load and merge topic-rules.json with optional workspace overrides."""
-    defaults_path = defaults_dir / "topic-rules.json"
-
-    try:
-        with open(defaults_path, "r", encoding="utf-8") as f:
-            default_rules = json.load(f)
-        logger.debug("Loaded topic rules from %s", defaults_path)
-    except FileNotFoundError:
-        raise FileNotFoundError(f"Default topic rules config not found: {defaults_path}")
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON in default topic rules config: {e}")
-
-    if config_dir is None:
-        return default_rules
-
-    config_path = config_dir / "news-hotspots-topic-rules.json"
-
-    try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            overlay_rules = json.load(f)
-        logger.debug("Loaded topic rules overlay from %s", config_path)
-    except FileNotFoundError:
-        logger.debug("No user topic rules config found at %s, using defaults only", config_path)
-        return default_rules
-    except json.JSONDecodeError as e:
-        logger.warning("Invalid JSON in user topic rules config %s: %s, using defaults only", config_path, e)
-        return default_rules
-
-    return deep_merge_dicts(default_rules, overlay_rules)
 
 
 def load_merged_api_sources(defaults_dir: Path, config_dir: Optional[Path] = None) -> List[Dict[str, Any]]:

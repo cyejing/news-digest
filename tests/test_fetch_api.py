@@ -74,7 +74,7 @@ class TestFetchApi(unittest.TestCase):
             "priority": 4,
         }
         with patch.object(fetch_api, "fetch_hacker_news", return_value=[{"title": "A", "link": "https://example.com"}]):
-            result = fetch_api.fetch_source(source, limit=1, topic_rules={"topic_priority": ["technology"]})
+            result = fetch_api.fetch_source(source, limit=1)
 
         self.assertEqual(result["topic"], "technology")
         self.assertEqual(result["articles"][0]["topic"], "technology")

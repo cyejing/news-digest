@@ -16,6 +16,16 @@ spec.loader.exec_module(source_health)
 
 
 class TestSourceHealth(unittest.TestCase):
+    def test_parse_args_requires_input(self):
+        old_argv = source_health.sys.argv
+        try:
+            source_health.sys.argv = ["source-health.py"]
+            with self.assertRaises(SystemExit) as ctx:
+                source_health.parse_args()
+            self.assertNotEqual(ctx.exception.code, 0)
+        finally:
+            source_health.sys.argv = old_argv
+
     def test_compute_step_state_supports_pipeline_meta(self):
         meta = {
             "pipeline_version": "2.0.0",

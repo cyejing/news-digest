@@ -1,7 +1,7 @@
 ---
 name: news-hotspots
-description: 聚合 RSS、GitHub、Twitter、Reddit、Google News 等来源的全球科技与 AI 新闻，生成每日/每周新闻热点报告。
-version: "3.21.2"
+description: 聚合 RSS、GitHub、Twitter、Reddit、Google News 等多源科技与 AI 新闻，生成每日/每周热点报告，支持查看新闻热点、换一批新闻热点、创建定时任务与健康诊断。
+version: "4.0.2"
 homepage: https://github.com/cyejing/news-hotspots
 source: https://github.com/cyejing/news-hotspots
 metadata:
@@ -42,6 +42,16 @@ files:
 
 ---
 
+## 路径说明
+
+| 占位符           | 说明                             |
+|---------------|--------------------------------|
+| `<SKILL_DIR>` | 当前 skill 仓库根目录                 |
+| `<WORKSPACE>` | 当前工作区根目录                       |
+| `<DATE>`      | 归档日期，格式 `YYYY-MM-DD`，以脚本实际产出为准 |
+| `<LANGUAGE>`  | 用户使用的语言                        |
+
+
 ## 当天换一批新闻
 
 当用户想看"新一批还没看过的新闻"时，不需要重跑抓取，直接再次执行 `merge-hotspots.py`：
@@ -50,7 +60,6 @@ files:
 uv run <SKILL_DIR>/scripts/merge-hotspots.py \
   --input <WORKSPACE>/archive/news-hotspots/<DATE>/json/merge-sources.json \
   --archive <WORKSPACE>/archive/news-hotspots \
-  --debug /tmp/news-hotspots/debug \
   --mode daily
 ```
 
@@ -85,13 +94,3 @@ uv run <SKILL_DIR>/scripts/source-health.py \
 - `History report`：历史健康趋势
 - `Run details`：每次运行的详细诊断
 
----
-
-## 路径说明
-
-| 占位符           | 说明                             |
-|---------------|--------------------------------|
-| `<SKILL_DIR>` | 当前 skill 仓库根目录                 |
-| `<WORKSPACE>` | 当前工作区根目录                       |
-| `<DATE>`      | 归档日期，格式 `YYYY-MM-DD`，以脚本实际产出为准 |
-| `<LANGUAGE>`  | 用户使用的语言                        |

@@ -22,12 +22,6 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from urllib.parse import urlparse
 
 try:
-    from topic_utils import resolve_primary_topic
-except ImportError:
-    sys.path.append(str(Path(__file__).parent))
-    from topic_utils import resolve_primary_topic
-
-try:
     from rapidfuzz import fuzz
 except ImportError:  # pragma: no cover - defensive fallback
     fuzz = None
@@ -73,6 +67,19 @@ DOMAIN_LIMIT_EXEMPT = {"x.com", "twitter.com", "github.com", "reddit.com"}
 CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
 NON_WORD_RE = re.compile(r"[^\w\s\u3400-\u4dbf\u4e00-\u9fff]+", re.UNICODE)
 SPACE_RE = re.compile(r"\s+")
+
+
+def resolve_article_topic(article: Dict[str, Any], default: str = "") -> str:
+    topic = str(article.get("topic") or "").strip()
+    return topic or default
+
+
+def resolve_cluster_topic(cluster_articles: List[Dict[str, Any]], default: str = "") -> str:
+    for article in cluster_articles:
+        topic = resolve_article_topic(article)
+        if topic:
+            return topic
+    return default
 
 
 # ---------------------------------------------------------------------------
@@ -738,7 +745,7 @@ def merge_cluster_metadata(canonical: Dict[str, Any], cluster_articles: List[Dic
         "cluster_size": len(cluster_articles),
     }
 
-    merged_topic = resolve_primary_topic(cluster_articles, default=canonical.get("topic", ""))
+    merged_topic = resolve_cluster_topic(cluster_articles, default=resolve_article_topic(canonical, ""))
     if merged_topic:
         canonical["topic"] = merged_topic
     return canonical
@@ -847,7 +854,7 @@ def group_by_topics(articles: List[Dict[str, Any]], dedup_across_topics: bool = 
     seen_article_ids: Set[str] = set()
 
     for article in articles:
-        primary_topic = resolve_primary_topic(article, default="uncategorized") or "uncategorized"
+        primary_topic = resolve_article_topic(article, default="uncategorized") or "uncategorized"
         article_id = normalize_title(article.get("title", ""))
 
         if dedup_across_topics and article_id in seen_article_ids:
@@ -1068,7 +1075,7 @@ def collect_articles(
                 source_name="GitHub Trending",
                 source_id=f"trending-{repo.get('repo', '')}",
                 source_priority=4,
-                topic=resolve_primary_topic(repo, default="github"),
+                topic=str(repo.get("topic") or ""),
                 snippet=repo.get("description", ""),
                 stars=repo.get("stars", 0),
                 daily_stars_est=repo.get("daily_stars_est", 0),

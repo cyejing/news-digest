@@ -23,14 +23,10 @@ from typing import Any, Dict, List, Optional, Sequence
 from urllib.parse import quote
 
 try:
-    from config_loader import load_merged_topic_rules
     from fetch_timing import build_request_trace, summarize_request_traces
-    from topic_utils import resolve_primary_topic
 except ImportError:
     sys.path.append(str(Path(__file__).parent))
-    from config_loader import load_merged_topic_rules
     from fetch_timing import build_request_trace, summarize_request_traces
-    from topic_utils import resolve_primary_topic
 
 SOURCE_ID = "weibo-hot"
 SOURCE_NAME = "Weibo Hot"
@@ -151,7 +147,7 @@ def build_weibo_search_url(keyword: str) -> str:
     return f"https://s.weibo.com/weibo?q={quote(keyword)}"
 
 
-def transform_hot_item(item: Dict[str, Any], topic_rules: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+def transform_hot_item(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     title = first_non_empty(
         item.get("title"),
         item.get("note"),
@@ -212,12 +208,9 @@ def fetch_weibo_hot(
     elapsed_s = time.monotonic() - started_at
     request_trace = build_request_trace("weibo/hot", elapsed_s, status="ok", backend="bb-browser", adapter="weibo/hot")
     raw_items = extract_hot_items(payload)
-    effective_defaults_dir = defaults_dir or Path("config/defaults")
-    topic_rules = load_merged_topic_rules(effective_defaults_dir, config_dir)
-
     articles: List[Dict[str, Any]] = []
     for item in raw_items:
-        article = transform_hot_item(item, topic_rules=topic_rules)
+        article = transform_hot_item(item)
         if article:
             articles.append(article)
 
@@ -228,7 +221,7 @@ def fetch_weibo_hot(
         "source_type": "weibo",
         "name": SOURCE_NAME,
         "priority": SOURCE_PRIORITY,
-        "topic": resolve_primary_topic([article.get("topic") for article in articles], rules=topic_rules),
+        "topic": articles[0].get("topic", "social") if articles else "social",
         "status": "ok" if articles else "error",
         "elapsed_s": round(elapsed_s, 3),
         "timing_keywords": request_trace["timing_keywords"],

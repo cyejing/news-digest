@@ -23,7 +23,6 @@ REPORT_LIMIT = 20
 ERROR_TEXT_LIMIT = 180
 META_FILE_RE = re.compile(r".*\.meta\d*\.json$")
 META_SUFFIX_RE = re.compile(r"\.meta(\d*)\.json$")
-DEFAULT_INPUT_DIR = Path("/tmp/news-hotspots/debug")
 
 
 @dataclass
@@ -416,7 +415,12 @@ def render_run_details(diagnostics: List[DiagnosticRecord]) -> List[str]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Read step metadata and report pipeline health diagnostics.")
-    parser.add_argument("--input", type=Path, default=DEFAULT_INPUT_DIR, help="Directory to inspect. Reads direct *.meta*.json files in this directory and recent <DATE>/meta/*.meta*.json below it.")
+    parser.add_argument(
+        "--input",
+        type=Path,
+        required=True,
+        help="Directory to inspect. Reads direct *.meta*.json files in this directory and recent <DATE>/meta/*.meta*.json below it.",
+    )
     parser.add_argument("--verbose", "-v", action="store_true")
     return parser.parse_args()
 

@@ -27,15 +27,13 @@ from pathlib import Path
 from typing import Dict, List, Any, Optional
 
 try:
-    from config_loader import load_merged_api_sources, load_merged_topic_rules
+    from config_loader import load_merged_api_sources
     from fetch_timing import build_request_trace, summarize_request_traces
-    from topic_utils import get_source_topic
 except ImportError:
     import sys
     sys.path.append(str(Path(__file__).parent))
-    from config_loader import load_merged_api_sources, load_merged_topic_rules
+    from config_loader import load_merged_api_sources
     from fetch_timing import build_request_trace, summarize_request_traces
-    from topic_utils import get_source_topic
 
 try:
     import requests
@@ -282,11 +280,11 @@ def load_api_sources(defaults_dir: Optional[Path] = None, config_dir: Optional[P
     return api_sources
 
 
-def fetch_source(source: Dict[str, Any], limit: int = 15, topic_rules: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def fetch_source(source: Dict[str, Any], limit: int = 15) -> Dict[str, Any]:
     """Fetch a single API source."""
     source_id = source["id"]
     name = source.get("name", source_id)
-    topic = get_source_topic(source, rules=topic_rules)
+    topic = str(source.get("topic") or "")
     priority = normalize_priority(source.get("priority"))
     
     fetcher = API_SOURCE_FETCHERS.get(source_id)
@@ -372,7 +370,6 @@ def main() -> int:
         args.output = Path(temp_path)
 
     try:
-        topic_rules = load_merged_topic_rules(args.defaults, args.config)
         sources = [
             source for source in load_api_sources(args.defaults, args.config)
             if source.get("enabled", True)
@@ -382,7 +379,7 @@ def main() -> int:
         
         results = []
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-            futures = {pool.submit(fetch_source, source, args.limit, topic_rules): source for source in sources}
+            futures = {pool.submit(fetch_source, source, args.limit): source for source in sources}
             
             for future in as_completed(futures):
                 result = future.result()

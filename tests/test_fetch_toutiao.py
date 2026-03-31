@@ -15,7 +15,7 @@ spec.loader.exec_module(fetch_toutiao)
 
 
 class TestFetchToutiao(unittest.TestCase):
-    def test_transform_hot_item_keeps_ai_relevant_topic(self):
+    def test_transform_hot_item_uses_fixed_social_topic(self):
         article = fetch_toutiao.transform_hot_item(
             {
                 "title": "OpenAI 新模型推动 AI Agent 应用继续升温",
@@ -25,7 +25,7 @@ class TestFetchToutiao(unittest.TestCase):
         )
 
         self.assertIsNotNone(article)
-        self.assertEqual(article["topic"], "ai-frontier")
+        self.assertEqual(article["topic"], "social")
         self.assertEqual(article["hot_score"], 6320000)
         self.assertIn("www.toutiao.com/search/", article["link"])
 
@@ -41,10 +41,10 @@ class TestFetchToutiao(unittest.TestCase):
 
         self.assertIsNotNone(article)
         self.assertEqual(article["link"], "https://www.toutiao.com/article/123456/")
-        self.assertEqual(article["topic"], "ai-infra")
+        self.assertEqual(article["topic"], "social")
         self.assertEqual(article["rank"], 9)
 
-    def test_transform_hot_item_drops_irrelevant_topic(self):
+    def test_transform_hot_item_keeps_non_ai_items_with_social_topic(self):
         article = fetch_toutiao.transform_hot_item(
             {
                 "query": "今晚吃什么夜宵",
@@ -52,12 +52,12 @@ class TestFetchToutiao(unittest.TestCase):
             }
         )
 
-        self.assertIsNone(article)
+        self.assertIsNotNone(article)
+        self.assertEqual(article["topic"], "social")
 
     def test_fetch_toutiao_hot_uses_bb_browser_command(self):
         with patch.object(fetch_toutiao, "run_bb_browser_site", return_value={"items": []}) as run_mock:
-            with patch.object(fetch_toutiao, "load_merged_topic_rules", return_value={"topic_priority": []}):
-                data = fetch_toutiao.fetch_toutiao_hot(MagicMock(), limit=16)
+            data = fetch_toutiao.fetch_toutiao_hot(MagicMock(), limit=16)
 
         run_mock.assert_called_once_with(["toutiao/hot", "16"])
         self.assertEqual(data["source_type"], "toutiao")

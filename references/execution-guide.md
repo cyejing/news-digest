@@ -122,7 +122,6 @@ uv run <SKILL_DIR>/scripts/source-health.py \
    uv run <SKILL_DIR>/scripts/merge-hotspots.py \
      --input <WORKSPACE>/archive/news-hotspots/<DATE>/json/merge-sources.json \
      --archive <WORKSPACE>/archive/news-hotspots \
-     --debug /tmp/news-hotspots/debug \
      --mode <MODE>
    ```
 

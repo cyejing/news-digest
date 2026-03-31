@@ -24,14 +24,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set
 
-try:
-    from config_loader import load_merged_topic_rules
-    from topic_utils import resolve_primary_topic
-except ImportError:
-    sys.path.append(str(Path(__file__).parent))
-    from config_loader import load_merged_topic_rules
-    from topic_utils import resolve_primary_topic
-
 SOURCE_ID = "v2ex-api"
 SOURCE_NAME = "V2EX Hot"
 SOURCE_PRIORITY = 4
@@ -101,7 +93,6 @@ def truncate_summary(value: str, limit: int = 240) -> str:
 
 def transform_topic(
     item: Dict[str, Any],
-    topic_rules: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     title = clean_text(item.get("title", ""))
     link = item.get("url", "")
@@ -145,11 +136,8 @@ def fetch_v2ex_hot(
     payload = run_bb_browser_site(["v2ex/hot"])
     raw_topics = payload.get("topics", [])
     articles: List[Dict[str, Any]] = []
-    effective_defaults_dir = defaults_dir or Path("config/defaults")
-    topic_rules = load_merged_topic_rules(effective_defaults_dir, config_dir)
-
     for item in raw_topics:
-        article = transform_topic(item, topic_rules=topic_rules)
+        article = transform_topic(item)
         if article:
             articles.append(article)
 
@@ -164,7 +152,7 @@ def fetch_v2ex_hot(
         "source_type": "v2ex",
         "name": SOURCE_NAME,
         "priority": SOURCE_PRIORITY,
-        "topic": resolve_primary_topic([article.get("topic") for article in articles], rules=topic_rules),
+        "topic": articles[0].get("topic", "technology") if articles else "technology",
         "status": "ok" if articles else "error",
         "items": len(articles),
         "count": len(articles),

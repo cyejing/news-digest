@@ -26,12 +26,6 @@ except ImportError:
     from config_loader import load_merged_sources, load_merged_topics
     from fetch_timing import build_request_trace, summarize_request_traces
 
-try:
-    from topic_utils import get_source_topic
-except ImportError:
-    sys.path.append(str(Path(__file__).parent))
-    from topic_utils import get_source_topic
-
 COOLDOWN_SECONDS = float(os.environ.get("BB_BROWSER_REDDIT_COOLDOWN_SECONDS", "6.0"))
 DEFAULT_TIMEOUT = 180
 DEFAULT_RESULTS_PER_QUERY = 10
@@ -142,7 +136,7 @@ def parse_post(
     query: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     if isinstance(topic_or_source, dict):
-        topic_id = get_source_topic(topic_or_source)
+        topic_id = str(topic_or_source.get("topic") or "")
         min_score = int(topic_or_source.get("min_score", min_score) or 0)
         if query is None:
             query = topic_or_source.get("query") or topic_or_source.get("search_query")
@@ -239,7 +233,7 @@ def fetch_source(source: Dict[str, Any], hours: int) -> Dict[str, Any]:
         raw_posts = fetch_search_source(source, hours) if mode == "search" else fetch_hot_source(source)
         articles = []
         for item in raw_posts:
-            article = parse_post(item, get_source_topic(source), int(source.get("min_score", 0) or 0), source.get("query") or source.get("search_query"))
+            article = parse_post(item, str(source.get("topic") or ""), int(source.get("min_score", 0) or 0), source.get("query") or source.get("search_query"))
             if article:
                 articles.append(article)
         elapsed_s = time.monotonic() - started_at
@@ -260,7 +254,7 @@ def fetch_source(source: Dict[str, Any], hours: int) -> Dict[str, Any]:
             "sort": source.get("sort", "hot"),
             "mode": mode,
             "priority": source.get("priority", 3),
-            "topic": get_source_topic(source),
+            "topic": str(source.get("topic") or ""),
             "status": "ok",
             "attempts": 1,
             "elapsed_s": round(elapsed_s, 3),
@@ -290,7 +284,7 @@ def fetch_source(source: Dict[str, Any], hours: int) -> Dict[str, Any]:
             "sort": source.get("sort", "hot"),
             "mode": mode,
             "priority": source.get("priority", 3),
-            "topic": get_source_topic(source),
+            "topic": str(source.get("topic") or ""),
             "status": "error",
             "attempts": 1,
             "error": str(exc)[:200],

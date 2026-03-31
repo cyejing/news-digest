@@ -30,12 +30,6 @@ except ImportError:
     from config_loader import load_merged_sources
 
 try:
-    from topic_utils import get_source_topic
-except ImportError:
-    sys.path.append(str(Path(__file__).parent))
-    from topic_utils import get_source_topic
-
-try:
     from fetch_timing import build_request_trace, summarize_request_traces
 except ImportError:
     sys.path.append(str(Path(__file__).parent))
@@ -210,7 +204,7 @@ def fetch_releases_with_retry(source: Dict[str, Any], cutoff: datetime, github_t
     name = source["name"]
     repo = source["repo"]
     priority = normalize_priority(source.get("priority"))
-    topic = get_source_topic(source)
+    topic = str(source.get("topic") or "")
     started_at = time.monotonic()
     request_log: List[Dict[str, Any]] = []
     

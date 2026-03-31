@@ -15,7 +15,7 @@ spec.loader.exec_module(fetch_zhihu)
 
 
 class TestFetchZhihu(unittest.TestCase):
-    def test_transform_hot_item_keeps_ai_relevant_topic(self):
+    def test_transform_hot_item_uses_fixed_social_topic(self):
         article = fetch_zhihu.transform_hot_item(
             {
                 "title": "OpenAI 新模型和 Agent 体系到底强在哪？",
@@ -27,7 +27,7 @@ class TestFetchZhihu(unittest.TestCase):
         )
 
         self.assertIsNotNone(article)
-        self.assertEqual(article["topic"], "ai-frontier")
+        self.assertEqual(article["topic"], "social")
         self.assertEqual(article["hot_score"], 12640000)
 
     def test_transform_hot_item_builds_question_url_from_id(self):
@@ -47,9 +47,9 @@ class TestFetchZhihu(unittest.TestCase):
 
         self.assertIsNotNone(article)
         self.assertEqual(article["link"], "https://www.zhihu.com/question/456")
-        self.assertEqual(article["topic"], "ai-infra")
+        self.assertEqual(article["topic"], "social")
 
-    def test_transform_hot_item_drops_irrelevant_topic(self):
+    def test_transform_hot_item_keeps_non_ai_items_with_social_topic(self):
         article = fetch_zhihu.transform_hot_item(
             {
                 "title": "第一次自己在家做红烧肉需要注意什么？",
@@ -58,12 +58,12 @@ class TestFetchZhihu(unittest.TestCase):
             }
         )
 
-        self.assertIsNone(article)
+        self.assertIsNotNone(article)
+        self.assertEqual(article["topic"], "social")
 
     def test_fetch_zhihu_hot_uses_bb_browser_command(self):
         with patch.object(fetch_zhihu, "run_bb_browser_site", return_value={"items": []}) as run_mock:
-            with patch.object(fetch_zhihu, "load_merged_topic_rules", return_value={"topic_priority": []}):
-                data = fetch_zhihu.fetch_zhihu_hot(MagicMock(), limit=12)
+            data = fetch_zhihu.fetch_zhihu_hot(MagicMock(), limit=12)
 
         run_mock.assert_called_once_with(["zhihu/hot", "12"])
         self.assertEqual(data["source_type"], "zhihu")

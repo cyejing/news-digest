@@ -31,11 +31,9 @@ from email.utils import parsedate_to_datetime
 
 try:
     from fetch_timing import build_request_trace, summarize_request_traces
-    from topic_utils import get_source_topic
 except ImportError:
     sys.path.append(str(Path(__file__).parent))
     from fetch_timing import build_request_trace, summarize_request_traces
-    from topic_utils import get_source_topic
 
 
 def normalize_priority(priority: Any, default: int = 3) -> int:
@@ -417,7 +415,7 @@ def fetch_feed_with_retry(source: Dict[str, Any], cutoff: datetime, no_cache: bo
     name = source["name"]
     url = source["url"]
     priority = normalize_priority(source.get("priority"))
-    topic = get_source_topic(source)
+    topic = str(source.get("topic") or "")
     request_log: List[Dict[str, Any]] = []
     started_at = time.monotonic()
     

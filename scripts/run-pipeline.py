@@ -31,15 +31,15 @@ DEFAULT_HOTSPOTS_TOP = 5
 ARCHIVE_RETENTION_DAYS = 90
 ERROR_TEXT_LIMIT = 180
 STEP_COOLDOWN_DEFAULTS = {
-    "fetch-twitter.py": ("BB_BROWSER_TWITTER_COOLDOWN_SECONDS", 7.0),
-    "fetch-reddit.py": ("BB_BROWSER_REDDIT_COOLDOWN_SECONDS", 6.0),
+    "fetch-twitter.py": ("BB_BROWSER_TWITTER_COOLDOWN_SECONDS", 12.0),
+    "fetch-reddit.py": ("BB_BROWSER_REDDIT_COOLDOWN_SECONDS", 10.0),
     "fetch-google.py": ("BB_BROWSER_GOOGLE_COOLDOWN_SECONDS", 12.0),
     "fetch-v2ex.py": ("BB_BROWSER_V2EX_COOLDOWN_SECONDS", 5.0),
     "fetch-zhihu.py": ("BB_BROWSER_ZHIHU_COOLDOWN_SECONDS", 6.0),
     "fetch-weibo.py": ("BB_BROWSER_WEIBO_COOLDOWN_SECONDS", 6.0),
     "fetch-toutiao.py": ("BB_BROWSER_TOUTIAO_COOLDOWN_SECONDS", 6.0),
-    "fetch-github.py": ("NEWS_HOTSPOTS_GITHUB_COOLDOWN_SECONDS", 2.0),
-    "fetch-github-trending.py": ("NEWS_HOTSPOTS_GITHUB_TRENDING_COOLDOWN_SECONDS", 2.0),
+    "fetch-github.py": ("NEWS_HOTSPOTS_GITHUB_COOLDOWN_SECONDS", 3.0),
+    "fetch-github-trending.py": ("NEWS_HOTSPOTS_GITHUB_TRENDING_COOLDOWN_SECONDS", 3.0),
 }
 
 INTERRUPT_EVENT = threading.Event()

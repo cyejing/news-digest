@@ -17,7 +17,6 @@ spec.loader.exec_module(config_loader)
 
 load_merged_sources = config_loader.load_merged_sources
 load_merged_topics = config_loader.load_merged_topics
-load_merged_topic_rules = config_loader.load_merged_topic_rules
 load_merged_api_sources = config_loader.load_merged_api_sources
 
 DEFAULTS_DIR = Path(__file__).parent.parent / "config" / "defaults"
@@ -166,38 +165,6 @@ class TestLoadTopics(unittest.TestCase):
             self.assertEqual(source.get("topic"), "github")
 
 
-class TestLoadTopicRules(unittest.TestCase):
-    def test_loads_defaults(self):
-        rules = load_merged_topic_rules(DEFAULTS_DIR)
-        self.assertIn("topic_priority", rules)
-        self.assertIn("legacy_topic_map", rules)
-
-    def test_v2ex_rules_are_available(self):
-        rules = load_merged_topic_rules(DEFAULTS_DIR)
-        v2ex_rules = rules.get("source_rules", {}).get("v2ex", {})
-        self.assertIn("node_topic_map", v2ex_rules)
-        self.assertIn("keyword_map", v2ex_rules)
-
-    def test_overlay_merges_topic_rules(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            overlay = {
-                "source_rules": {
-                    "v2ex": {
-                        "node_topic_map": {
-                            "life": ["social"]
-                        }
-                    }
-                }
-            }
-            overlay_path = Path(tmpdir) / "news-hotspots-topic-rules.json"
-            with open(overlay_path, "w", encoding="utf-8") as f:
-                json.dump(overlay, f)
-
-            rules = load_merged_topic_rules(DEFAULTS_DIR, Path(tmpdir))
-            self.assertEqual(rules["source_rules"]["v2ex"]["node_topic_map"]["life"], ["social"])
-            self.assertIn("programmer", rules["source_rules"]["v2ex"]["node_topic_map"])
-
-
 class TestLoadApiSources(unittest.TestCase):
     def test_loads_default_api_sources(self):
         sources = load_merged_api_sources(DEFAULTS_DIR)
@@ -219,6 +186,13 @@ class TestLoadApiSources(unittest.TestCase):
             sources = load_merged_api_sources(DEFAULTS_DIR, Path(tmpdir))
             weibo = next(source for source in sources if source["id"] == "weibo-api")
             self.assertFalse(weibo["enabled"])
+
+    def test_all_api_sources_have_single_topic(self):
+        sources = load_merged_api_sources(DEFAULTS_DIR)
+        self.assertTrue(sources)
+        for source in sources:
+            self.assertIsInstance(source.get("topic"), str)
+            self.assertTrue(source.get("topic"))
 
 
 class TestSourceCounts(unittest.TestCase):

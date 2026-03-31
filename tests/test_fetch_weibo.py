@@ -15,7 +15,7 @@ spec.loader.exec_module(fetch_weibo)
 
 
 class TestFetchWeibo(unittest.TestCase):
-    def test_transform_hot_item_keeps_ai_relevant_topic(self):
+    def test_transform_hot_item_uses_fixed_social_topic(self):
         article = fetch_weibo.transform_hot_item(
             {
                 "note": "OpenAI 发布新模型后 Agent 开发门槛会继续降低吗",
@@ -25,7 +25,7 @@ class TestFetchWeibo(unittest.TestCase):
         )
 
         self.assertIsNotNone(article)
-        self.assertEqual(article["topic"], "ai-frontier")
+        self.assertEqual(article["topic"], "social")
         self.assertEqual(article["hot_score"], 8530000)
         self.assertIn("s.weibo.com/weibo?q=", article["link"])
 
@@ -41,10 +41,10 @@ class TestFetchWeibo(unittest.TestCase):
 
         self.assertIsNotNone(article)
         self.assertEqual(article["link"], "https://s.weibo.com/weibo?q=%23英伟达新GPU%23")
-        self.assertEqual(article["topic"], "ai-infra")
+        self.assertEqual(article["topic"], "social")
         self.assertEqual(article["rank"], 7)
 
-    def test_transform_hot_item_drops_irrelevant_topic(self):
+    def test_transform_hot_item_keeps_non_ai_items_with_social_topic(self):
         article = fetch_weibo.transform_hot_item(
             {
                 "word": "今晚吃什么家常菜",
@@ -52,12 +52,12 @@ class TestFetchWeibo(unittest.TestCase):
             }
         )
 
-        self.assertIsNone(article)
+        self.assertIsNotNone(article)
+        self.assertEqual(article["topic"], "social")
 
     def test_fetch_weibo_hot_uses_bb_browser_command(self):
         with patch.object(fetch_weibo, "run_bb_browser_site", return_value={"items": []}) as run_mock:
-            with patch.object(fetch_weibo, "load_merged_topic_rules", return_value={"topic_priority": []}):
-                data = fetch_weibo.fetch_weibo_hot(MagicMock(), limit=18)
+            data = fetch_weibo.fetch_weibo_hot(MagicMock(), limit=18)
 
         run_mock.assert_called_once_with(["weibo/hot", "18"])
         self.assertEqual(data["source_type"], "weibo")

@@ -2,7 +2,7 @@
 """
 Configuration validation script for news-hotspots.
 
-Validates sources.json, topics.json, topic-rules.json, and api-sources.json against JSON Schema and performs
+Validates sources.json, topics.json, and api-sources.json against JSON Schema and performs
 additional consistency checks.
 
 Usage:
@@ -15,12 +15,6 @@ import logging
 import sys
 from pathlib import Path
 from typing import Dict, Any
-
-try:
-    from topic_utils import get_source_topic
-except ImportError:
-    sys.path.append(str(Path(__file__).parent))
-    from topic_utils import get_source_topic
 
 SOURCE_TYPES = ("rss", "twitter", "github", "reddit")
 
@@ -115,15 +109,6 @@ def validate_against_schema(data: Dict[str, Any], schema: Dict[str, Any],
                     "topics": schema["properties"]["topics"]
                 }
             }
-        elif config_type == "topic_rules":
-            schema_def = {
-                "definitions": schema["definitions"],
-                "type": "object",
-                "properties": {
-                    "topic_rules": schema["properties"]["topic_rules"]
-                },
-            }
-            data = {"topic_rules": data}
         elif config_type == "api_sources":
             schema_def = {
                 "definitions": schema["definitions"],
@@ -148,9 +133,7 @@ def validate_against_schema(data: Dict[str, Any], schema: Dict[str, Any],
         return False
 
 
-def validate_sources_consistency(sources_data: Dict[str, Any],
-                               topics_data: Dict[str, Any],
-                               topic_rules: Dict[str, Any]) -> bool:
+def validate_sources_consistency(sources_data: Dict[str, Any], topics_data: Dict[str, Any]) -> bool:
     """Validate consistency between sources and topics."""
     errors = []
     
@@ -163,7 +146,7 @@ def validate_sources_consistency(sources_data: Dict[str, Any],
     # Check source topic references
     for source in flat_sources:
         source_id = source.get("id", "unknown")
-        source_topic = get_source_topic(source, rules=topic_rules)
+        source_topic = str(source.get("topic") or "").strip()
         
         # Check for invalid topic references
         if source_topic and source_topic not in valid_topics:
@@ -192,41 +175,6 @@ def validate_sources_consistency(sources_data: Dict[str, Any],
     else:
         logging.info("✅ Consistency validation passed")
         return True
-
-
-def validate_topic_rules_consistency(topic_rules: Dict[str, Any], topics_data: Dict[str, Any]) -> bool:
-    """Validate topic-rules references against the topic taxonomy."""
-    valid_topics = {topic["id"] for topic in topics_data["topics"]}
-    errors = []
-
-    for topic_id in topic_rules.get("topic_priority", []):
-        if topic_id not in valid_topics:
-            errors.append(f"topic_priority contains invalid topic: {topic_id}")
-
-    for legacy_id, mapped_id in (topic_rules.get("legacy_topic_map") or {}).items():
-        if mapped_id not in valid_topics:
-            errors.append(f"legacy_topic_map[{legacy_id!r}] points to invalid topic: {mapped_id}")
-
-    v2ex_rules = (topic_rules.get("source_rules", {}) or {}).get("v2ex", {})
-    for mapping_name in ("node_topic_map", "keyword_map"):
-        mapping = v2ex_rules.get(mapping_name, {})
-        if not isinstance(mapping, dict):
-            continue
-        for source_key, topic_ids in mapping.items():
-            if not isinstance(topic_ids, list):
-                continue
-            for topic_id in topic_ids if mapping_name == "node_topic_map" else [source_key]:
-                if topic_id not in valid_topics:
-                    errors.append(f"v2ex {mapping_name} references invalid topic: {topic_id}")
-
-    if errors:
-        logging.error("❌ Topic rules consistency validation failed:")
-        for error in errors:
-            logging.error(f"   {error}")
-        return False
-
-    logging.info("✅ Topic rules consistency validation passed")
-    return True
 
 
 def validate_topic_search_fields(topics_data: Dict[str, Any]) -> bool:
@@ -349,7 +297,6 @@ def main():
             load_merged_api_sources,
             load_merged_sources,
             load_merged_topics,
-            load_merged_topic_rules,
         )
     except ImportError:
         # Fallback for relative import
@@ -359,7 +306,6 @@ def main():
             load_merged_api_sources,
             load_merged_sources,
             load_merged_topics,
-            load_merged_topic_rules,
         )
     
     # File paths
@@ -381,7 +327,6 @@ def main():
         # Load merged configuration data
         merged_sources = load_merged_sources(defaults_dir, config_dir)
         merged_topics = load_merged_topics(defaults_dir, config_dir)
-        merged_topic_rules = load_merged_topic_rules(defaults_dir, config_dir)
         merged_api_sources = {"sources": load_merged_api_sources(defaults_dir, config_dir)}
 
         # Convert to the format expected by validation functions
@@ -396,12 +341,10 @@ def main():
         # Schema validation
         all_valid &= validate_against_schema(sources_data, schema, "sources")
         all_valid &= validate_against_schema(topics_data, schema, "topics")
-        all_valid &= validate_against_schema(merged_topic_rules, schema, "topic_rules")
         all_valid &= validate_against_schema(merged_api_sources, schema, "api_sources")
 
         # Consistency validation
-        all_valid &= validate_sources_consistency(sources_data, topics_data, merged_topic_rules)
-        all_valid &= validate_topic_rules_consistency(merged_topic_rules, topics_data)
+        all_valid &= validate_sources_consistency(sources_data, topics_data)
         all_valid &= validate_topic_search_fields(topics_data)
         all_valid &= validate_api_sources_consistency(merged_api_sources, topics_data)
         

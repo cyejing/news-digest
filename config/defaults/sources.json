@@ -106,6 +106,11 @@
       },
       {
         "id": "venturebeat-ai-rss",
+        "type": "rss",
+        "name": "VentureBeat AI",
+        "url": "https://venturebeat.com/ai/feed/",
+        "enabled": true,
+        "priority": 3,
         "note": "前沿 AI 研究",
         "topic": "ai-frontier"
       },
@@ -278,56 +283,6 @@
         "priority": 3,
         "note": "ABC News 政治频道",
         "topic": "world"
-      },
-      {
-        "id": "foxnews-latest-rss",
-        "type": "rss",
-        "name": "Fox News Latest Headlines",
-        "url": "https://moxie.foxnews.com/google-publisher/latest.xml",
-        "enabled": false,
-        "priority": 3,
-        "note": "Fox News 官方头条；2026-03-31 实测稳定 403，默认停用",
-        "topic": "world"
-      },
-      {
-        "id": "foxnews-world-rss",
-        "type": "rss",
-        "name": "Fox News World",
-        "url": "https://moxie.foxnews.com/google-publisher/world.xml",
-        "enabled": false,
-        "priority": 3,
-        "note": "Fox News 国际新闻；2026-03-31 实测稳定 403，默认停用",
-        "topic": "world"
-      },
-      {
-        "id": "foxnews-us-rss",
-        "type": "rss",
-        "name": "Fox News U.S.",
-        "url": "https://moxie.foxnews.com/google-publisher/us.xml",
-        "enabled": false,
-        "priority": 3,
-        "note": "Fox News 美国新闻；2026-03-31 实测稳定 403，默认停用",
-        "topic": "world"
-      },
-      {
-        "id": "foxnews-politics-rss",
-        "type": "rss",
-        "name": "Fox News Politics",
-        "url": "https://moxie.foxnews.com/google-publisher/politics.xml",
-        "enabled": false,
-        "priority": 3,
-        "note": "Fox News 政治频道；2026-03-31 实测稳定 403，默认停用",
-        "topic": "world"
-      },
-      {
-        "id": "foxnews-tech-rss",
-        "type": "rss",
-        "name": "Fox News Technology",
-        "url": "https://moxie.foxnews.com/google-publisher/tech.xml",
-        "enabled": false,
-        "priority": 3,
-        "note": "Fox News 科技频道；2026-03-31 实测稳定 403，默认停用",
-        "topic": "technology"
       },
       {
         "id": "voa-usa-rss",
@@ -708,16 +663,6 @@
         "priority": 3,
         "note": "纽约时报商业财经",
         "topic": "business"
-      },
-      {
-        "id": "wapo-rss",
-        "type": "rss",
-        "name": "华盛顿邮报",
-        "url": "http://feeds.washingtonpost.com/rss/homepage",
-        "enabled": false,
-        "priority": 3,
-        "note": "华盛顿邮报首页；2026-03-31 实测单源超时 122s，默认停用",
-        "topic": "world"
       },
       {
         "id": "cnet-rss",

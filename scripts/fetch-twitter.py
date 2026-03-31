@@ -27,12 +27,6 @@ except ImportError:
     from config_loader import load_merged_sources, load_merged_topics
     from fetch_timing import build_request_trace, summarize_request_traces
 
-try:
-    from topic_utils import get_source_topic
-except ImportError:
-    sys.path.append(str(Path(__file__).parent))
-    from topic_utils import get_source_topic
-
 COOLDOWN_SECONDS = float(os.environ.get("BB_BROWSER_TWITTER_COOLDOWN_SECONDS", "7.0"))
 DEFAULT_TIMEOUT = 180
 DEFAULT_COUNT = 20
@@ -220,7 +214,7 @@ def fetch_source(source: Dict[str, Any], cutoff: datetime) -> Dict[str, Any]:
         payload = fetch_timeline(source)
         articles = []
         for item in extract_tweets(payload):
-            article = parse_tweet(item, get_source_topic(source), cutoff)
+            article = parse_tweet(item, str(source.get("topic") or ""), cutoff)
             if article:
                 articles.append(article)
         elapsed_s = time.monotonic() - started_at
@@ -237,7 +231,7 @@ def fetch_source(source: Dict[str, Any], cutoff: datetime) -> Dict[str, Any]:
             "name": source.get("name", source.get("id", "unknown")),
             "handle": source.get("handle"),
             "priority": source.get("priority", 3),
-            "topic": get_source_topic(source),
+            "topic": str(source.get("topic") or ""),
             "status": "ok",
             "attempts": 1,
             "elapsed_s": round(elapsed_s, 3),
@@ -264,7 +258,7 @@ def fetch_source(source: Dict[str, Any], cutoff: datetime) -> Dict[str, Any]:
             "name": source.get("name", source.get("id", "unknown")),
             "handle": source.get("handle"),
             "priority": source.get("priority", 3),
-            "topic": get_source_topic(source),
+            "topic": str(source.get("topic") or ""),
             "status": "error",
             "attempts": 1,
             "error": str(exc)[:200],
