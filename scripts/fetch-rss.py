@@ -56,7 +56,9 @@ except ImportError:
     HAS_FEEDPARSER = False
     logging.warning("feedparser not installed — using XML fallback parser. Install with: pip install feedparser")
 
-TIMEOUT = 60
+RSS_TIMEOUT_ENV = "NEWS_HOTSPOTS_RSS_TIMEOUT_SECONDS"
+RSS_TIMEOUT_DEFAULT = 30
+TIMEOUT = int(float(os.environ.get(RSS_TIMEOUT_ENV, str(RSS_TIMEOUT_DEFAULT))))
 MAX_WORKERS = 10  
 MAX_ARTICLES_PER_FEED = 20
 RETRY_COUNT = 1
@@ -81,6 +83,21 @@ def fetch_with_redirects(url, headers, timeout=TIMEOUT):
     opener = build_opener(RedirectHandler308)
     req = Request(url, headers=headers)
     return opener.open(req, timeout=timeout)
+
+
+def is_retryable_rss_error(exc: Exception) -> bool:
+    """Retry only transient RSS failures; fail fast on stable bad feeds."""
+    if isinstance(exc, HTTPError):
+        return exc.code in {408, 425, 429, 500, 502, 503, 504}
+    if isinstance(exc, TimeoutError):
+        return True
+    if isinstance(exc, URLError):
+        reason = str(getattr(exc, "reason", exc)).lower()
+        transient_markers = ("timed out", "timeout", "tempor", "connection reset", "connection aborted")
+        return any(marker in reason for marker in transient_markers)
+    message = str(exc).lower()
+    transient_markers = ("timed out", "timeout", "tempor", "connection reset", "connection aborted")
+    return any(marker in message for marker in transient_markers)
 
 
 def setup_logging(verbose: bool) -> logging.Logger:
@@ -523,7 +540,7 @@ def fetch_feed_with_retry(source: Dict[str, Any], cutoff: datetime, no_cache: bo
             )
             logging.debug(f"Attempt {attempt + 1} failed for {name}: {error_msg}")
             
-            if attempt < RETRY_COUNT:
+            if attempt < RETRY_COUNT and is_retryable_rss_error(e):
                 time.sleep(RETRY_DELAY * (2 ** attempt))  # Exponential backoff
                 continue
             else:
@@ -663,6 +680,7 @@ def main():
             "defaults_dir": str(args.defaults),
             "config_dir": str(args.config) if args.config else None,
             "hours": args.hours,
+            "request_timeout_s": TIMEOUT,
             "feedparser_available": HAS_FEEDPARSER,
             "calls_total": len(results),
             "calls_ok": ok_count,

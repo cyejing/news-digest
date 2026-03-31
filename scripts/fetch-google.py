@@ -31,6 +31,7 @@ COOLDOWN_SECONDS = float(os.environ.get("BB_BROWSER_GOOGLE_COOLDOWN_SECONDS", "1
 DEFAULT_TIMEOUT = 180
 DEFAULT_RESULTS_PER_QUERY = 10
 MAX_RESULTS_PER_QUERY = 10
+MAX_QUERIES_PER_TOPIC = max(1, int(os.environ.get("NEWS_HOTSPOTS_GOOGLE_MAX_QUERIES_PER_TOPIC", "3")))
 _last_success_at: Optional[float] = None
 
 
@@ -108,7 +109,7 @@ def build_google_query(base_query: str, exclude: List[str]) -> str:
 
 def fetch_topic(topic: Dict[str, Any], logger: logging.Logger) -> Dict[str, Any]:
     search = topic.get("search", {})
-    queries = search.get("google_queries", [])
+    queries = list(search.get("google_queries", []))[:MAX_QUERIES_PER_TOPIC]
     exclude = search.get("exclude", [])
     per_query = result_count_for_topic(topic)
 
@@ -199,6 +200,7 @@ def main() -> int:
         topics = load_merged_topics(args.defaults, args.config)
         logger.info("Fetching Google News for %d topics sequentially", len(topics))
         logger.info("Google bb-browser cooldown: %.1fs", COOLDOWN_SECONDS)
+        logger.info("Google queries per topic cap: %d", MAX_QUERIES_PER_TOPIC)
         topic_results = [fetch_topic(topic, logger) for topic in topics if topic.get("search", {}).get("google_queries")]
         ok_topics = sum(1 for result in topic_results if result["status"] == "ok")
         total_articles = sum(result.get("count", 0) for result in topic_results)
@@ -223,6 +225,7 @@ def main() -> int:
             "queries_ok": ok_queries,
             "topics_total": len(topic_results),
             "topics_ok": ok_topics,
+            "queries_per_topic_cap": MAX_QUERIES_PER_TOPIC,
             "total_articles": total_articles,
             "request_timing_summary": summarize_request_traces(all_request_timings),
             "topics": topic_results,

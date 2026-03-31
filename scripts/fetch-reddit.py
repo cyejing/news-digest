@@ -37,6 +37,7 @@ DEFAULT_TIMEOUT = 180
 DEFAULT_RESULTS_PER_QUERY = 10
 MAX_RESULTS_PER_QUERY = 20
 _last_success_at: Optional[float] = None
+_reddit_search_block_reason: Optional[str] = None
 
 
 def setup_logging(verbose: bool) -> logging.Logger:
@@ -80,6 +81,11 @@ def run_bb_browser_site(args: Sequence[str], timeout: int = DEFAULT_TIMEOUT) -> 
 
     _last_success_at = time.monotonic()
     return payload
+
+
+def is_blocking_reddit_search_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "http 403" in message and "please log in to https://www.reddit.com" in message
 
 
 def load_sources(defaults_dir: Path, config_dir: Optional[Path] = None) -> List[Dict[str, Any]]:
@@ -299,6 +305,7 @@ def fetch_source(source: Dict[str, Any], hours: int) -> Dict[str, Any]:
 
 
 def fetch_topic(topic: Dict[str, Any], hours: int, logger: logging.Logger) -> Dict[str, Any]:
+    global _reddit_search_block_reason
     search = topic.get("search", {})
     queries = search.get("reddit_queries", [])
     exclude = search.get("exclude", [])
@@ -311,6 +318,9 @@ def fetch_topic(topic: Dict[str, Any], hours: int, logger: logging.Logger) -> Di
     started_at = time.monotonic()
 
     for query in queries:
+        if _reddit_search_block_reason:
+            logger.warning("Reddit query skipped [%s]: %s", topic.get("id"), _reddit_search_block_reason)
+            break
         compiled_query = " ".join([query] + [f'-"{term}"' if " " in term else f"-{term}" for term in exclude if str(term).strip()])
         query_started_at = time.monotonic()
         try:
@@ -331,6 +341,9 @@ def fetch_topic(topic: Dict[str, Any], hours: int, logger: logging.Logger) -> Di
             elapsed_s = time.monotonic() - query_started_at
             request_timings.append(build_request_trace(compiled_query, elapsed_s, status="error", backend="bb-browser", adapter="reddit/search", error=str(exc)[:200]))
             query_stats.append({"query": compiled_query, "status": "error", "count": 0, "error": str(exc)[:200], "elapsed_s": round(elapsed_s, 3), "timing_keywords": request_timings[-1]["timing_keywords"]})
+            if is_blocking_reddit_search_error(exc):
+                _reddit_search_block_reason = str(exc)[:200]
+                break
 
     articles = list(dedup_by_url.values())
     articles.sort(key=lambda article: article.get("score", 0), reverse=True)

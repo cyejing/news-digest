@@ -284,9 +284,9 @@
         "type": "rss",
         "name": "Fox News Latest Headlines",
         "url": "https://moxie.foxnews.com/google-publisher/latest.xml",
-        "enabled": true,
+        "enabled": false,
         "priority": 3,
-        "note": "Fox News 官方头条",
+        "note": "Fox News 官方头条；2026-03-31 实测稳定 403，默认停用",
         "topic": "world"
       },
       {
@@ -294,9 +294,9 @@
         "type": "rss",
         "name": "Fox News World",
         "url": "https://moxie.foxnews.com/google-publisher/world.xml",
-        "enabled": true,
+        "enabled": false,
         "priority": 3,
-        "note": "Fox News 国际新闻",
+        "note": "Fox News 国际新闻；2026-03-31 实测稳定 403，默认停用",
         "topic": "world"
       },
       {
@@ -304,9 +304,9 @@
         "type": "rss",
         "name": "Fox News U.S.",
         "url": "https://moxie.foxnews.com/google-publisher/us.xml",
-        "enabled": true,
+        "enabled": false,
         "priority": 3,
-        "note": "Fox News 美国新闻",
+        "note": "Fox News 美国新闻；2026-03-31 实测稳定 403，默认停用",
         "topic": "world"
       },
       {
@@ -314,9 +314,9 @@
         "type": "rss",
         "name": "Fox News Politics",
         "url": "https://moxie.foxnews.com/google-publisher/politics.xml",
-        "enabled": true,
+        "enabled": false,
         "priority": 3,
-        "note": "Fox News 政治频道",
+        "note": "Fox News 政治频道；2026-03-31 实测稳定 403，默认停用",
         "topic": "world"
       },
       {
@@ -324,9 +324,9 @@
         "type": "rss",
         "name": "Fox News Technology",
         "url": "https://moxie.foxnews.com/google-publisher/tech.xml",
-        "enabled": true,
+        "enabled": false,
         "priority": 3,
-        "note": "Fox News 科技频道",
+        "note": "Fox News 科技频道；2026-03-31 实测稳定 403，默认停用",
         "topic": "technology"
       },
       {
@@ -714,9 +714,9 @@
         "type": "rss",
         "name": "华盛顿邮报",
         "url": "http://feeds.washingtonpost.com/rss/homepage",
-        "enabled": true,
+        "enabled": false,
         "priority": 3,
-        "note": "华盛顿邮报首页",
+        "note": "华盛顿邮报首页；2026-03-31 实测单源超时 122s，默认停用",
         "topic": "world"
       },
       {

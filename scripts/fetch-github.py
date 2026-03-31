@@ -19,7 +19,7 @@ import time
 import tempfile
 from datetime import datetime, timedelta, timezone
 from urllib.request import urlopen, Request
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 
@@ -35,7 +35,15 @@ except ImportError:
     sys.path.append(str(Path(__file__).parent))
     from topic_utils import get_source_topic
 
-TIMEOUT = 60
+try:
+    from fetch_timing import build_request_trace, summarize_request_traces
+except ImportError:
+    sys.path.append(str(Path(__file__).parent))
+    from fetch_timing import build_request_trace, summarize_request_traces
+
+GITHUB_TIMEOUT_ENV = "NEWS_HOTSPOTS_GITHUB_TIMEOUT_SECONDS"
+GITHUB_TIMEOUT_DEFAULT = 25
+TIMEOUT = int(float(os.environ.get(GITHUB_TIMEOUT_ENV, str(GITHUB_TIMEOUT_DEFAULT))))
 MAX_RELEASES_PER_REPO = 20
 RETRY_COUNT = 2
 RETRY_DELAY = 2.0  # seconds
@@ -63,6 +71,21 @@ def get_github_cooldown_seconds() -> float:
         return max(0.0, float(raw))
     except ValueError:
         return GITHUB_COOLDOWN_DEFAULT
+
+
+def is_retryable_github_error(exc: Exception) -> bool:
+    """Retry only transient GitHub failures."""
+    if isinstance(exc, HTTPError):
+        return exc.code in {408, 425, 429, 500, 502, 503, 504}
+    if isinstance(exc, TimeoutError):
+        return True
+    if isinstance(exc, URLError):
+        reason = str(getattr(exc, "reason", exc)).lower()
+        transient_markers = ("timed out", "timeout", "tempor", "connection reset", "connection aborted")
+        return any(marker in reason for marker in transient_markers)
+    message = str(exc).lower()
+    transient_markers = ("timed out", "timeout", "tempor", "connection reset", "connection aborted")
+    return any(marker in message for marker in transient_markers)
 
 
 def setup_logging(verbose: bool) -> logging.Logger:
@@ -188,6 +211,8 @@ def fetch_releases_with_retry(source: Dict[str, Any], cutoff: datetime, github_t
     repo = source["repo"]
     priority = normalize_priority(source.get("priority"))
     topic = get_source_topic(source)
+    started_at = time.monotonic()
+    request_log: List[Dict[str, Any]] = []
     
     repo_name = get_repo_name(repo)
     api_url = f"https://api.github.com/repos/{repo}/releases"
@@ -214,6 +239,7 @@ def fetch_releases_with_retry(source: Dict[str, Any], cutoff: datetime, github_t
             headers["If-Modified-Since"] = cache_entry["last_modified"]
     
     for attempt in range(RETRY_COUNT + 1):
+        request_started_at = time.monotonic()
         try:
             req = Request(api_url, headers=headers)
             try:
@@ -230,6 +256,16 @@ def fetch_releases_with_retry(source: Dict[str, Any], cutoff: datetime, github_t
             except HTTPError as e:
                 if e.code == 304:
                     logging.info(f"⏭ {name}: not modified (304)")
+                    request_log.append(
+                        build_request_trace(
+                            api_url,
+                            time.monotonic() - request_started_at,
+                            status="ok",
+                            method="GET",
+                            attempt=attempt + 1,
+                            result="not_modified",
+                        )
+                    )
                     return {
                         "source_id": source_id,
                         "source_type": "github",
@@ -239,11 +275,24 @@ def fetch_releases_with_retry(source: Dict[str, Any], cutoff: datetime, github_t
                         "topic": topic,
                         "status": "ok",
                         "attempts": attempt + 1,
+                        "elapsed_s": round(time.monotonic() - started_at, 3),
                         "not_modified": True,
                         "count": 0,
                         "articles": [],
+                        "request_timings": request_log,
+                        "request_timing_summary": summarize_request_traces(request_log),
                     }
                 raise
+
+            request_log.append(
+                build_request_trace(
+                    api_url,
+                    time.monotonic() - request_started_at,
+                    status="ok",
+                    method="GET",
+                    attempt=attempt + 1,
+                )
+            )
             
             articles = []
             for release in releases_data[:MAX_RELEASES_PER_REPO]:
@@ -283,16 +332,29 @@ def fetch_releases_with_retry(source: Dict[str, Any], cutoff: datetime, github_t
                 "topic": topic,
                 "status": "ok",
                 "attempts": attempt + 1,
+                "elapsed_s": round(time.monotonic() - started_at, 3),
                 "items": len(articles),
                 "count": len(articles),
                 "articles": articles,
+                "request_timings": request_log,
+                "request_timing_summary": summarize_request_traces(request_log),
             }
             
         except Exception as e:
             error_msg = str(e)[:100]
+            request_log.append(
+                build_request_trace(
+                    api_url,
+                    time.monotonic() - request_started_at,
+                    status="error",
+                    method="GET",
+                    attempt=attempt + 1,
+                    error=error_msg,
+                )
+            )
             logging.debug(f"Attempt {attempt + 1} failed for {name}: {error_msg}")
             
-            if attempt < RETRY_COUNT:
+            if attempt < RETRY_COUNT and is_retryable_github_error(e):
                 # Exponential backoff with jitter for API rate limits
                 delay = RETRY_DELAY * (2 ** attempt)
                 time.sleep(delay)
@@ -308,9 +370,12 @@ def fetch_releases_with_retry(source: Dict[str, Any], cutoff: datetime, github_t
                     "status": "error",
                     "attempts": attempt + 1,
                     "error": error_msg,
+                    "elapsed_s": round(time.monotonic() - started_at, 3),
                     "items": 0,
                     "count": 0,
                     "articles": [],
+                    "request_timings": request_log,
+                    "request_timing_summary": summarize_request_traces(request_log),
                 }
 
 
@@ -433,6 +498,7 @@ def main():
             "config_dir": str(args.config) if args.config else None,
             "hours": args.hours,
             "github_token_used": github_token is not None,
+            "request_timeout_s": TIMEOUT,
             "cooldown_s": cooldown_s,
             "calls_total": len(results),
             "calls_ok": ok_count,
@@ -441,6 +507,12 @@ def main():
             "sources_total": len(results),
             "sources_ok": ok_count,
             "total_articles": total_articles,
+            "request_timing_summary": summarize_request_traces(
+                trace
+                for result in results
+                for trace in result.get("request_timings", [])
+                if isinstance(trace, dict)
+            ),
             "sources": results,
         }
 
