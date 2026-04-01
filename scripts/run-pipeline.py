@@ -254,7 +254,15 @@ def extract_items_from_payload(payload: Optional[Dict[str, Any]], fallback: int 
         return int(fallback or 0)
     
     if isinstance(payload.get("topics"), list):
-        return sum(len(topic.get("items", [])) for topic in payload["topics"] if isinstance(topic, dict))
+        total = 0
+        for topic in payload["topics"]:
+            if isinstance(topic, dict):
+                items = topic.get("items")
+                if isinstance(items, list):
+                    total += len(items)
+                elif isinstance(items, int):
+                    total += items
+        return total
     
     return int(
         payload.get("items_total")
