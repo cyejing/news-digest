@@ -146,6 +146,28 @@ class TestDeduplication(unittest.TestCase):
         self.assertIn("_score_components", result[0])
         self.assertIn("final_score", result[0])
 
+    def test_preserves_canonical_topic_when_merging_similar_articles(self):
+        articles = [
+            {
+                "title": "OpenAI releases GPT-5 model",
+                "link": "https://example.com/openai-gpt5",
+                "topic": "ai-frontier",
+                "source_type": "rss",
+                "source_priority": 5,
+            },
+            {
+                "title": "OpenAI releases GPT5 model",
+                "link": "https://example.com/openai-gpt5-duplicate",
+                "topic": "ai-infra",
+                "source_type": "twitter",
+                "source_priority": 3,
+            },
+        ]
+        result = deduplicate_articles(articles)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["topic"], "ai-frontier")
+        self.assertEqual(result[0]["source_type"], "rss")
+
 
 class TestDomainLimits(unittest.TestCase):
     def test_limits_regular_domain(self):

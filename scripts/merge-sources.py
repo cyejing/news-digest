@@ -745,9 +745,14 @@ def merge_cluster_metadata(canonical: Dict[str, Any], cluster_articles: List[Dic
         "cluster_size": len(cluster_articles),
     }
 
-    merged_topic = resolve_cluster_topic(cluster_articles, default=resolve_article_topic(canonical, ""))
-    if merged_topic:
-        canonical["topic"] = merged_topic
+    canonical_topic = resolve_article_topic(canonical)
+    if canonical_topic:
+        pass
+    else:
+        merged_topic = resolve_cluster_topic(cluster_articles, default="")
+        if merged_topic:
+            canonical["topic"] = merged_topic
+    
     return canonical
 
 
