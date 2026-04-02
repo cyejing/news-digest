@@ -30,23 +30,30 @@ import subprocess
 import sys
 import tempfile
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 try:
     from config_loader import load_merged_runtime_config, load_merged_reddit_sources, load_merged_topics
-    from step_contract import build_request_trace, build_step_meta, configure_slow_request_thresholds, normalize_failed_item, write_result_with_meta
+    from step_contract import build_request_trace, build_step_meta, configure_slow_request_thresholds, from_timestamp_local, local_now, normalize_failed_item, write_result_with_meta
 except ImportError:
     sys.path.append(str(Path(__file__).parent))
     from config_loader import load_merged_runtime_config, load_merged_reddit_sources, load_merged_topics
-    from step_contract import build_request_trace, build_step_meta, configure_slow_request_thresholds, normalize_failed_item, write_result_with_meta
+    from step_contract import build_request_trace, build_step_meta, configure_slow_request_thresholds, from_timestamp_local, local_now, normalize_failed_item, write_result_with_meta
 
 COOLDOWN_SECONDS = 6.0
 DEFAULT_TIMEOUT = 180
 RESULTS_PER_QUERY = 10
 _last_success_at: Optional[float] = None
 _reddit_search_block_reason: Optional[str] = None
+_last_request_elapsed_s: Optional[float] = None
+
+
+class TimedRuntimeError(RuntimeError):
+    def __init__(self, message: str, elapsed_s: float):
+        super().__init__(message)
+        self.elapsed_s = elapsed_s
 
 
 def setup_logging(verbose: bool) -> logging.Logger:
@@ -80,10 +87,20 @@ def apply_runtime_config(defaults_dir: Path, config_dir: Optional[Path] = None) 
     return runtime
 
 
+def clear_last_request_elapsed() -> None:
+    global _last_request_elapsed_s
+    _last_request_elapsed_s = None
+
+
+def last_request_elapsed(default: float = 0.0) -> float:
+    return float(_last_request_elapsed_s if _last_request_elapsed_s is not None else default)
+
+
 def run_bb_browser_site(args: Sequence[str], timeout: Optional[int] = None) -> Dict[str, Any]:
-    global _last_success_at
+    global _last_success_at, _last_request_elapsed_s
     throttle_after_success()
     effective_timeout = int(timeout if timeout is not None else DEFAULT_TIMEOUT)
+    request_started_at = time.monotonic()
 
     result = subprocess.run(
         ["bb-browser", "site", *args],
@@ -92,14 +109,16 @@ def run_bb_browser_site(args: Sequence[str], timeout: Optional[int] = None) -> D
         timeout=effective_timeout,
         env=os.environ,
     )
+    elapsed_s = time.monotonic() - request_started_at
+    _last_request_elapsed_s = elapsed_s
     if result.returncode != 0:
         message = (result.stderr or result.stdout or "bb-browser command failed").strip()
-        raise RuntimeError(message)
+        raise TimedRuntimeError(message, elapsed_s)
 
     try:
         payload = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Invalid JSON from bb-browser: {exc}") from exc
+        raise TimedRuntimeError(f"Invalid JSON from bb-browser: {exc}", elapsed_s) from exc
 
     _last_success_at = time.monotonic()
     return payload
@@ -144,6 +163,7 @@ def parse_post(
         topic_or_source: Any,
         min_score: int = 0,
         query: Optional[str] = None,
+        source_name: str = "",
 ) -> Optional[Dict[str, Any]]:
     if isinstance(topic_or_source, dict):
         topic_id = str(topic_or_source.get("topic") or "")
@@ -175,7 +195,7 @@ def parse_post(
         created = data.get("created")
     date_iso = ""
     if isinstance(created, (int, float)):
-        date_iso = datetime.fromtimestamp(created, tz=timezone.utc).isoformat()
+        date_iso = from_timestamp_local(created).isoformat()
 
     score = int(data.get("score", 0) or 0)
     num_comments = int(data.get("num_comments", data.get("comments", data.get("comment_count", 0))) or 0)
@@ -198,6 +218,7 @@ def parse_post(
         "is_self": is_self,
         "summary": summary[:400],
         "topic": topic_id,
+        "source_name": str(source_name or data.get("subreddit_name_prefixed") or data.get("subreddit") or "Reddit").strip(),
         "metrics": {
             "score": score,
             "num_comments": num_comments,
@@ -209,33 +230,41 @@ def parse_post(
     return article
 
 
-def fetch_hot_source(source: Dict[str, Any]) -> List[Dict[str, Any]]:
+def fetch_hot_source(source: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], float]:
     subreddit = source.get("subreddit")
     limit = int(source.get("limit", 25) or 25)
     args = ["reddit/hot"]
     if subreddit:
         args.append(subreddit)
     args.append(str(limit))
+    clear_last_request_elapsed()
     payload = run_bb_browser_site(args)
-    return extract_posts(payload)
+    return extract_posts(payload), last_request_elapsed()
 
 
 def fetch_source(source: Dict[str, Any]) -> Dict[str, Any]:
-    started_at = time.monotonic()
     subreddit = source.get("subreddit")
     source_key = subreddit or source.get("id", "unknown")
     try:
-        raw_posts = fetch_hot_source(source)
+        raw_posts, elapsed_s = fetch_hot_source(source)
         articles = []
         for item in raw_posts:
-            article = parse_post(item, str(source.get("topic") or ""), int(source.get("min_score", 0) or 0))
+            article = parse_post(
+                item,
+                str(source.get("topic") or ""),
+                int(source.get("min_score", 0) or 0),
+                source_name=str(source.get("name") or source.get("subreddit") or source.get("id") or "Reddit"),
+            )
             if article:
                 articles.append(article)
-        elapsed_s = time.monotonic() - started_at
         request_trace = build_request_trace(
+            source.get("id") or source_key,
             source_key,
             elapsed_s,
             status="ok",
+            source_type="reddit",
+            method="CLI",
+            attempt=1,
             backend="bb-browser",
             adapter="reddit/hot",
         )
@@ -259,11 +288,15 @@ def fetch_source(source: Dict[str, Any]) -> Dict[str, Any]:
             "failed_items": [],
         }
     except Exception as exc:
-        elapsed_s = time.monotonic() - started_at
+        elapsed_s = getattr(exc, "elapsed_s", 0.0)
         request_trace = build_request_trace(
+            source.get("id") or source_key,
             source_key,
             elapsed_s,
             status="error",
+            source_type="reddit",
+            method="CLI",
+            attempt=1,
             backend="bb-browser",
             adapter="reddit/hot",
             error=str(exc)[:200],
@@ -285,7 +318,7 @@ def fetch_source(source: Dict[str, Any]) -> Dict[str, Any]:
             "count": 0,
             "articles": [],
             "request_traces": [request_trace],
-            "failed_items": [normalize_failed_item(source.get("id"), str(exc)[:200], elapsed_s)],
+            "failed_items": [],
         }
 
 
@@ -299,8 +332,7 @@ def fetch_topic(topic: Dict[str, Any], hours: int, logger: logging.Logger) -> Di
 
     dedup_by_url: Dict[str, Dict[str, Any]] = {}
     request_traces: List[Dict[str, Any]] = []
-    started_at = time.monotonic()
-    failed_items: List[Dict[str, Any]] = []
+    total_request_elapsed_s = 0.0
     ok_queries = 0
 
     for query in queries:
@@ -309,25 +341,52 @@ def fetch_topic(topic: Dict[str, Any], hours: int, logger: logging.Logger) -> Di
             break
         compiled_query = " ".join(
             [query] + [f'-"{term}"' if " " in term else f"-{term}" for term in exclude if str(term).strip()])
-        query_started_at = time.monotonic()
         try:
+            clear_last_request_elapsed()
             payload = run_bb_browser_site(["reddit/search", compiled_query, "top", time_filter, str(per_query)])
+            elapsed_s = last_request_elapsed()
             posts = extract_posts(payload)
             kept = 0
             for item in posts:
                 article = parse_post(item, topic.get("id"), 0, compiled_query)
                 if not article:
                     continue
+                article["source_name"] = article.get("source_name") or "Reddit Search"
                 dedup_by_url.setdefault(article["link"], article)
                 kept += 1
-            elapsed_s = time.monotonic() - query_started_at
-            request_traces.append(build_request_trace(compiled_query, elapsed_s, status="ok", backend="bb-browser", adapter="reddit/search"))
+            total_request_elapsed_s += elapsed_s
+            request_traces.append(
+                build_request_trace(
+                    topic.get("id") or compiled_query,
+                    compiled_query,
+                    elapsed_s,
+                    status="ok",
+                    source_type="reddit",
+                    method="CLI",
+                    attempt=1,
+                    backend="bb-browser",
+                    adapter="reddit/search",
+                )
+            )
             ok_queries += 1
         except Exception as exc:
             logger.warning("Reddit query failed [%s]: %s", topic.get("id"), exc)
-            elapsed_s = time.monotonic() - query_started_at
-            request_traces.append(build_request_trace(compiled_query, elapsed_s, status="error", backend="bb-browser", adapter="reddit/search", error=str(exc)[:200]))
-            failed_items.append(normalize_failed_item(compiled_query, str(exc)[:200], elapsed_s))
+            elapsed_s = getattr(exc, "elapsed_s", last_request_elapsed())
+            total_request_elapsed_s += elapsed_s
+            request_traces.append(
+                build_request_trace(
+                    topic.get("id") or compiled_query,
+                    compiled_query,
+                    elapsed_s,
+                    status="error",
+                    source_type="reddit",
+                    method="CLI",
+                    attempt=1,
+                    backend="bb-browser",
+                    adapter="reddit/search",
+                    error=str(exc)[:200],
+                )
+            )
             if is_blocking_reddit_search_error(exc):
                 _reddit_search_block_reason = str(exc)[:200]
                 break
@@ -337,10 +396,10 @@ def fetch_topic(topic: Dict[str, Any], hours: int, logger: logging.Logger) -> Di
     return {
         "topic_id": topic.get("id"),
         "status": "ok" if articles else "error",
-        "elapsed_s": round(time.monotonic() - started_at, 3),
+        "elapsed_s": round(total_request_elapsed_s, 3),
         "calls_total": len(queries),
         "calls_ok": ok_queries,
-        "failed_items": failed_items,
+        "failed_items": [],
         "request_traces": request_traces,
         "items": len(articles),
         "count": len(articles),
@@ -405,22 +464,23 @@ def main() -> int:
         ok_calls = ok_sources + ok_query_calls
         articles = [article for result in source_results for article in result.get("articles", []) if isinstance(article, dict)]
         articles.extend(article for result in topic_results for article in result.get("articles", []) if isinstance(article, dict))
-        failed_items = [item for result in [*source_results, *topic_results] for item in result.get("failed_items", []) if isinstance(item, dict)]
         request_traces = [trace for result in [*source_results, *topic_results] for trace in result.get("request_traces", []) if isinstance(trace, dict)]
+        effective_elapsed_s = sum(float(result.get("elapsed_s", 0) or 0) for result in [*source_results, *topic_results])
 
         output = {
-            "generated": datetime.now(timezone.utc).isoformat(),
+            "generated": local_now().isoformat(),
             "source_type": "reddit",
             "articles": articles,
         }
         meta = build_step_meta(
             step_key="reddit",
             status="ok" if ok_calls == total_calls and total_posts > 0 else ("partial" if ok_calls > 0 and total_posts > 0 else "error"),
-            elapsed_s=time.monotonic() - step_started_at,
+            elapsed_active_s=effective_elapsed_s,
+            elapsed_total_s=time.monotonic() - step_started_at,
             items=total_posts,
             calls_total=total_calls,
             calls_ok=ok_calls,
-            failed_items=failed_items,
+            failed_items=None,
             request_traces=request_traces,
         )
         write_result_with_meta(args.output, output, meta)

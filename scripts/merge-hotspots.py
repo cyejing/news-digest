@@ -33,11 +33,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 try:
-    from config_loader import load_merged_runtime_config
+    from config_loader import load_merged_runtime_config, load_merged_topics
 except ImportError:
     import sys
     sys.path.append(str(Path(__file__).parent))
-    from config_loader import load_merged_runtime_config
+    from config_loader import load_merged_runtime_config, load_merged_topics
 
 DEFAULT_TOP_N = 5
 SCORE_FORMULA = "base_priority_score + fetch_local_rank_score + history_score + cross_source_hot_score + recency_score"
@@ -65,6 +65,25 @@ def load_runtime_config() -> Dict[str, Any]:
     return load_merged_runtime_config(defaults_dir, effective_config_dir)
 
 
+def load_topic_metadata() -> Dict[str, Dict[str, str]]:
+    defaults_dir = Path(os.environ.get("NEWS_HOTSPOTS_DEFAULTS_DIR", "config/defaults"))
+    config_dir = Path(os.environ.get("NEWS_HOTSPOTS_CONFIG_DIR", "workspace/config"))
+    effective_config_dir = config_dir if config_dir.exists() else None
+    topics = load_merged_topics(defaults_dir, effective_config_dir)
+    metadata: Dict[str, Dict[str, str]] = {}
+    for topic in topics:
+        if not isinstance(topic, dict):
+            continue
+        topic_id = str(topic.get("id") or "").strip()
+        if not topic_id:
+            continue
+        metadata[topic_id] = {
+            "emoji": str(topic.get("emoji") or "").strip(),
+            "label": str(topic.get("label") or "").strip(),
+        }
+    return metadata
+
+
 def get_sorted_articles(source_type_data: Dict[str, Any]) -> List[Dict[str, Any]]:
     articles = source_type_data.get("articles", [])
     if not isinstance(articles, list):
@@ -74,6 +93,17 @@ def get_sorted_articles(source_type_data: Dict[str, Any]) -> List[Dict[str, Any]
 
 def humanize_topic_id(topic_id: str) -> str:
     return topic_id.replace("-", " ").replace("_", " ").title()
+
+
+def topic_display_title(topic_id: str, topic_metadata: Optional[Dict[str, Dict[str, str]]] = None) -> str:
+    metadata = topic_metadata.get(topic_id, {}) if isinstance(topic_metadata, dict) else {}
+    emoji = str(metadata.get("emoji") or "").strip()
+    label = str(metadata.get("label") or "").strip()
+    if label:
+        localized = label.split("/", 1)[1].strip() if "/" in label else label
+        return f"{emoji} {localized}".strip() if emoji else localized
+    fallback = humanize_topic_id(topic_id)
+    return f"{emoji} {fallback}".strip() if emoji else fallback
 
 
 def normalize_title_key(value: Any) -> str:
@@ -102,7 +132,6 @@ def hotspot_item(article: Dict[str, Any], rank: int) -> Dict[str, Any]:
         article.get("title")
         or article.get("name")
         or article.get("repo")
-        or article.get("source_name")
         or link
         or ""
     )
@@ -114,10 +143,7 @@ def hotspot_item(article: Dict[str, Any], rank: int) -> Dict[str, Any]:
         "hotspot_score": round(article.get("final_score", 0), 1),
         "source_type": article.get("source_type", ""),
         "source_name": article.get("source_name", ""),
-        "display_name": article.get("display_name"),
         "summary": (article.get("snippet") or article.get("summary") or "").strip(),
-        "source_names": article.get("source_names", []),
-        "source_name_count": article.get("source_name_count", 1),
         "metrics": normalize_metrics(article),
         "published_at": article.get("date") or article.get("published_at"),
     }
@@ -300,28 +326,35 @@ def select_topic_articles(topic_source_candidates: Dict[str, List[Dict[str, Any]
 
 def build_markdown(hotspots: Dict[str, Any], mode: str = "daily", extra_sections: str = "") -> str:
     normalized_mode = str(mode or "daily").strip().lower() or "daily"
-    lines: List[str] = [f"# {hotspots.get('generated_at', '')[:10] or '<DATE>'} {normalized_mode} 全球科技与 AI 热点", ""]
-    lines.append("## Summary")
-    lines.append(f"- generated_at: {hotspots.get('generated_at', '')}")
-    lines.append(f"- mode: {normalized_mode}")
-    lines.append(f"- total_articles: {hotspots.get('total_articles', 0)}")
+    summary_parts = [
+        f"mode:{normalized_mode}",
+        f"total_articles:{hotspots.get('total_articles', 0)}",
+    ]
     for source_type, count in sorted((hotspots.get("source_type_counts") or {}).items()):
-        lines.append(f"- {source_type}: {count}")
-    lines.append("")
+        summary_parts.append(f"{source_type}:{count}")
+    summary_parts.append(f"generated_at:{hotspots.get('generated_at', '')}")
+    lines: List[str] = [
+        "---",
+        f"summary: {' | '.join(summary_parts)}",
+        "---",
+        f"# {hotspots.get('generated_at', '')[:10] or '<DATE>'} {normalized_mode} 全球科技与 AI 热点",
+        "",
+    ]
     for topic in hotspots.get("topics", []):
         topic_title = topic.get("title") or humanize_topic_id(str(topic.get("id", "")))
         lines.append(f"## {topic_title}")
         for item in topic.get("items", []):
             hotspot_score = item.get("hotspot_score", 0)
-            link = item.get("link", "")
             title = item.get("title", "")
-            source_name = item.get("source_name") or item.get("display_name") or item.get("source_type", "")
-            lines.append(f"{item.get('rank', 0)}. ⭐{hotspot_score:.1f} | [{title}]({link})  ")
+            summary = item.get("summary", "")
+            source_name = item.get("source_name", "")
             metrics = item.get("metrics", {}) if isinstance(item.get("metrics"), dict) else {}
-            if metrics:
-                lines.append(f"   来源：{source_name} | 指标：{render_metrics(metrics)}")
+            title_part = f"{title} - {summary}" if summary else title
+            metrics_part = render_metrics(metrics)
+            if metrics_part:
+                lines.append(f"{item.get('rank', 0)}. ⭐{hotspot_score:.1f} | {title_part} | {source_name} | {metrics_part}")
             else:
-                lines.append(f"   来源：{source_name}")
+                lines.append(f"{item.get('rank', 0)}. ⭐{hotspot_score:.1f} | {title_part} | {source_name}")
         lines.append("")
     if extra_sections:
         lines.append(extra_sections.strip())
@@ -335,6 +368,7 @@ def build_hotspots(
     seen_titles: Optional[Set[str]] = None,
     seen_links: Optional[Set[str]] = None,
     debug: bool = False,
+    topic_metadata: Optional[Dict[str, Dict[str, str]]] = None,
 ) -> Dict[str, Any]:
     topic_entries: List[Dict[str, Any]] = []
     source_breakdown: Dict[str, int] = {
@@ -362,7 +396,7 @@ def build_hotspots(
         topic_entries.append(
             {
                 "id": topic_id,
-                "title": humanize_topic_id(topic_id),
+                "title": topic_display_title(topic_id, topic_metadata=topic_metadata),
                 "available_article_count": available_counts.get(topic_id, 0),
                 "remaining_article_count": remaining_counts.get(topic_id, 0),
                 "items": items,
@@ -431,6 +465,7 @@ def main() -> int:
 
     _, json_dir, markdown_dir = ensure_archive_dirs(args.archive)
     seen_titles, seen_links = load_seen_daily_keys(json_dir)
+    topic_metadata = load_topic_metadata()
 
     hotspots_json = build_hotspots(
         data,
@@ -438,6 +473,7 @@ def main() -> int:
         topic_filter=args.topic,
         seen_titles=seen_titles,
         seen_links=seen_links,
+        topic_metadata=topic_metadata,
     )
     debug_hotspots_json = build_hotspots(
         data,
@@ -446,6 +482,7 @@ def main() -> int:
         seen_titles=seen_titles,
         seen_links=seen_links,
         debug=True,
+        topic_metadata=topic_metadata,
     )
     json_output, markdown_output = resolve_archive_pair(json_dir, markdown_dir, stem=args.mode)
     json_output.write_text(json.dumps(hotspots_json, ensure_ascii=False, indent=2), encoding="utf-8")

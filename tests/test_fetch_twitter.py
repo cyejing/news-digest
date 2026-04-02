@@ -4,6 +4,7 @@ import importlib.util
 import json
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
@@ -48,6 +49,56 @@ class TestFetchTwitter(unittest.TestCase):
         sources = fetch_twitter.load_sources(ROOT / "config" / "defaults", None)
         self.assertTrue(sources)
         self.assertEqual(sources[0]["type"], "twitter")
+
+    def test_parse_tweet_leaves_summary_empty_without_distinct_field(self):
+        cutoff = fetch_twitter.local_now() - timedelta(hours=24)
+        article = fetch_twitter.parse_tweet(
+            {
+                "text": "same as title",
+                "url": "https://x.com/test/status/1",
+                "created_at": "Thu Apr 02 10:00:00 +0000 2026",
+            },
+            "ai",
+            cutoff,
+        )
+
+        self.assertIsNotNone(article)
+        self.assertEqual(article["title"], "same as title")
+        self.assertEqual(article["summary"], "")
+        self.assertEqual(article["source_name"], "Twitter")
+        self.assertEqual(datetime.fromisoformat(article["date"]).tzinfo, fetch_twitter.local_now().tzinfo)
+
+    def test_parse_tweet_uses_distinct_summary_field(self):
+        cutoff = fetch_twitter.local_now() - timedelta(hours=24)
+        article = fetch_twitter.parse_tweet(
+            {
+                "text": "tweet body",
+                "summary": "tweet summary",
+                "url": "https://x.com/test/status/2",
+                "created_at": "Thu Apr 02 10:00:00 +0000 2026",
+            },
+            "ai",
+            cutoff,
+        )
+
+        self.assertIsNotNone(article)
+        self.assertEqual(article["summary"], "tweet summary")
+        self.assertNotEqual(article["summary"], article["title"])
+
+    def test_parse_tweet_keeps_given_source_name(self):
+        cutoff = fetch_twitter.local_now() - timedelta(hours=24)
+        article = fetch_twitter.parse_tweet(
+            {
+                "text": "tweet body",
+                "url": "https://x.com/test/status/2",
+                "created_at": "Thu Apr 02 10:00:00 +0000 2026",
+            },
+            "ai",
+            cutoff,
+            source_name="OpenAI",
+        )
+
+        self.assertEqual(article["source_name"], "OpenAI")
 
 
 if __name__ == "__main__":

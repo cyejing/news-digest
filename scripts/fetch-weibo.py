@@ -30,18 +30,18 @@ import subprocess
 import sys
 import tempfile
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import quote
 
 try:
     from config_loader import load_merged_runtime_config
-    from step_contract import build_request_trace, build_step_meta, configure_slow_request_thresholds, normalize_failed_item, write_result_with_meta
+    from step_contract import build_request_trace, build_step_meta, configure_slow_request_thresholds, local_now, normalize_failed_item, write_result_with_meta
 except ImportError:
     sys.path.append(str(Path(__file__).parent))
     from config_loader import load_merged_runtime_config
-    from step_contract import build_request_trace, build_step_meta, configure_slow_request_thresholds, normalize_failed_item, write_result_with_meta
+    from step_contract import build_request_trace, build_step_meta, configure_slow_request_thresholds, local_now, normalize_failed_item, write_result_with_meta
 
 SOURCE_ID = "weibo-hot"
 SOURCE_NAME = "Weibo Hot"
@@ -51,6 +51,13 @@ DEFAULT_LIMIT = 30
 COOLDOWN_SECONDS = 6.0
 
 _last_success_at: Optional[float] = None
+_last_request_elapsed_s: Optional[float] = None
+
+
+class TimedRuntimeError(RuntimeError):
+    def __init__(self, message: str, elapsed_s: float):
+        super().__init__(message)
+        self.elapsed_s = elapsed_s
 
 
 def setup_logging(verbose: bool) -> logging.Logger:
@@ -84,10 +91,20 @@ def apply_runtime_config(defaults_dir: Path, config_dir: Optional[Path] = None) 
     return runtime
 
 
+def clear_last_request_elapsed() -> None:
+    global _last_request_elapsed_s
+    _last_request_elapsed_s = None
+
+
+def last_request_elapsed(default: float = 0.0) -> float:
+    return float(_last_request_elapsed_s if _last_request_elapsed_s is not None else default)
+
+
 def run_bb_browser_site(command: Sequence[str], timeout: Optional[int] = None) -> Dict[str, Any]:
-    global _last_success_at
+    global _last_success_at, _last_request_elapsed_s
     throttle_after_success()
     effective_timeout = int(timeout if timeout is not None else DEFAULT_TIMEOUT)
+    request_started_at = time.monotonic()
 
     result = subprocess.run(
         ["bb-browser", "site", *command],
@@ -97,14 +114,16 @@ def run_bb_browser_site(command: Sequence[str], timeout: Optional[int] = None) -
         env=os.environ,
     )
 
+    elapsed_s = time.monotonic() - request_started_at
+    _last_request_elapsed_s = elapsed_s
     if result.returncode != 0:
         message = (result.stderr or result.stdout or "bb-browser command failed").strip()
-        raise RuntimeError(message)
+        raise TimedRuntimeError(message, elapsed_s)
 
     try:
         payload = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Invalid JSON from bb-browser: {exc}") from exc
+        raise TimedRuntimeError(f"Invalid JSON from bb-browser: {exc}", elapsed_s) from exc
 
     _last_success_at = time.monotonic()
     return payload
@@ -212,8 +231,9 @@ def transform_hot_item(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return {
         "title": title,
         "link": link,
-        "date": datetime.now(timezone.utc).isoformat(),
+        "date": local_now().isoformat(),
         "summary": summary,
+        "source_name": SOURCE_NAME,
         "topic": topic,
         "hot_score": hot_score or 0,
         "rank": rank or 0,
@@ -231,10 +251,20 @@ def fetch_weibo_hot(
     limit: int = DEFAULT_LIMIT,
 ) -> Dict[str, Any]:
     logger.info("Weibo bb-browser cooldown: %.1fs", COOLDOWN_SECONDS)
-    started_at = time.monotonic()
+    clear_last_request_elapsed()
     payload = run_bb_browser_site(["weibo/hot", str(limit)])
-    elapsed_s = time.monotonic() - started_at
-    request_trace = build_request_trace("weibo/hot", elapsed_s, status="ok", backend="bb-browser", adapter="weibo/hot")
+    elapsed_s = last_request_elapsed()
+    request_trace = build_request_trace(
+        SOURCE_ID,
+        "weibo/hot",
+        elapsed_s,
+        status="ok",
+        source_type="weibo",
+        method="CLI",
+        attempt=1,
+        backend="bb-browser",
+        adapter="weibo/hot",
+    )
     raw_items = extract_hot_items(payload)
     articles: List[Dict[str, Any]] = []
     for item in raw_items:
@@ -262,7 +292,7 @@ def fetch_weibo_hot(
         source_result["error"] = "No tech-relevant Weibo hot topics found"
 
     return {
-        "generated": datetime.now(timezone.utc).isoformat(),
+        "generated": local_now().isoformat(),
         "source_type": "weibo",
         "calls_total": 1,
         "calls_ok": 1 if articles else 0,
@@ -306,6 +336,7 @@ def main() -> int:
         args.output = Path(temp_path)
 
     try:
+        step_started_at = time.monotonic()
         limit = args.limit if args.limit is not None else DEFAULT_LIMIT
         data = fetch_weibo_hot(
             logger,
@@ -318,11 +349,12 @@ def main() -> int:
         meta = build_step_meta(
             step_key="weibo",
             status="ok" if int(data.get("calls_ok", 0) or 0) == int(data.get("calls_total", 1) or 1) and int(data.get("items_total", 0) or 0) > 0 else "error",
-            elapsed_s=float(source_result.get("elapsed_s", 0) or 0),
+            elapsed_active_s=float(source_result.get("elapsed_s", 0) or 0),
+            elapsed_total_s=time.monotonic() - step_started_at,
             items=int(data.get("items_total", 0) or 0),
             calls_total=int(data.get("calls_total", 1) or 1),
             calls_ok=int(data.get("calls_ok", 0) or 0),
-            failed_items=[] if source_result.get("status") == "ok" else [normalize_failed_item(SOURCE_ID, source_result.get("error"), source_result.get("elapsed_s"))],
+            failed_items=None,
             request_traces=source_result.get("request_traces", []),
         )
         write_result_with_meta(args.output, output, meta)

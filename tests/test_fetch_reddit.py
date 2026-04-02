@@ -46,6 +46,38 @@ class TestFetchReddit(unittest.TestCase):
         self.assertTrue(sources)
         self.assertEqual(sources[0]["type"], "reddit")
 
+    def test_parse_post_uses_given_source_name(self):
+        article = fetch_reddit.parse_post(
+            {
+                "data": {
+                    "title": "Test reddit post",
+                    "permalink": "/r/test/comments/1",
+                    "created_utc": 1775124000,
+                    "score": 10,
+                    "num_comments": 2,
+                }
+            },
+            "ai",
+            source_name="r/test",
+        )
+        self.assertEqual(article["source_name"], "r/test")
+
+    def test_parse_post_falls_back_to_subreddit_name(self):
+        article = fetch_reddit.parse_post(
+            {
+                "data": {
+                    "title": "Test reddit post",
+                    "permalink": "/r/test/comments/1",
+                    "created_utc": 1775124000,
+                    "score": 10,
+                    "num_comments": 2,
+                    "subreddit_name_prefixed": "r/test",
+                }
+            },
+            "ai",
+        )
+        self.assertEqual(article["source_name"], "r/test")
+
 
 if __name__ == "__main__":
     unittest.main()

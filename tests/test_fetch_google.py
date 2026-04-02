@@ -4,6 +4,7 @@ import importlib.util
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
@@ -52,17 +53,61 @@ class TestFetchGoogle(unittest.TestCase):
                 items=0,
                 calls_total=2,
                 calls_ok=0,
-                failed_items=[{"id": "q1", "error": "boom", "elapsed_s": 1.2}],
-                request_traces=[],
+                failed_items=None,
+                request_traces=[
+                    {
+                        "source_id": "q1",
+                        "target": "openai",
+                        "elapsed_s": 1.2,
+                        "status": "error",
+                        "source_type": "google",
+                        "method": "CLI",
+                        "attempt": 1,
+                        "backend": "bb-browser",
+                        "adapter": "google/news",
+                        "error": "boom",
+                    }
+                ],
             )
             fetch_google.write_result_with_meta(output, result, meta)
 
             self.assertTrue(output.exists())
             self.assertTrue(output.with_suffix(".meta.json").exists())
             meta_payload = json.loads(output.with_suffix(".meta.json").read_text(encoding="utf-8"))
-            self.assertEqual(meta_payload["failed_items"][0]["id"], "q1")
-            self.assertIn("timing_summary", meta_payload)
+            self.assertEqual(meta_payload["failed_items"][0]["source_id"], "q1")
+            self.assertIn("request_timing_summary", meta_payload)
             self.assertIn("slow_requests", meta_payload)
+
+    def test_fetch_topic_maps_snippet_to_summary_and_uses_local_timezone(self):
+        topic = {"id": "ai", "search": {"google_queries": ["openai"]}}
+        payload = {
+            "results": [
+                {
+                    "title": "OpenAI launch",
+                    "url": "https://example.com/openai",
+                    "snippet": "New model shipped.",
+                    "timestamp": 1775124000,
+                    "source": "Example",
+                },
+                {
+                    "title": "No summary",
+                    "url": "https://example.com/no-summary",
+                    "timestamp": 1775124000,
+                    "source": "Example",
+                },
+            ]
+        }
+
+        with patch.object(fetch_google, "run_bb_browser_site", return_value=payload):
+            result = fetch_google.fetch_topic(topic, fetch_google.logging.getLogger("test"))
+
+        self.assertEqual(result["articles"][0]["summary"], "New model shipped.")
+        self.assertEqual(result["articles"][1]["summary"], "")
+        self.assertEqual(result["articles"][0]["source_name"], "Example")
+        self.assertEqual(
+            json.loads(json.dumps(result["articles"]))[0]["date"][-6:],
+            fetch_google.local_now().strftime("%z")[:3] + ":" + fetch_google.local_now().strftime("%z")[3:],
+        )
 
 
 if __name__ == "__main__":

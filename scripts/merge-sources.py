@@ -31,7 +31,7 @@ import sys
 import tempfile
 import unicodedata
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from urllib.parse import urlparse
@@ -39,10 +39,12 @@ from urllib.parse import urlparse
 try:
     from step_registry import ALL_SOURCE_STEPS, STEP_KEYS
     from rapidfuzz import fuzz
+    from step_contract import local_now, local_tzinfo, now_iso, to_local_datetime
 except ImportError:  # pragma: no cover - defensive fallback
     fuzz = None
     sys.path.append(str(Path(__file__).parent))
     from step_registry import ALL_SOURCE_STEPS, STEP_KEYS
+    from step_contract import local_now, local_tzinfo, now_iso, to_local_datetime
 
 
 SCORING_CONFIG = {
@@ -138,8 +140,8 @@ def parse_article_datetime(value: Any) -> Optional[datetime]:
     except Exception:
         return None
     if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
+        return parsed.replace(tzinfo=local_tzinfo())
+    return to_local_datetime(parsed)
 
 
 def normalize_title(title: str) -> str:
@@ -448,7 +450,7 @@ def calculate_recency_score_details(article: Dict[str, Any]) -> Dict[str, Any]:
     if article_date is None:
         return {"score": 0.0, "hours_old": None, "bucket": "missing_date"}
 
-    hours_old = (datetime.now(timezone.utc) - article_date).total_seconds() / 3600
+    hours_old = (local_now() - article_date).total_seconds() / 3600
     if hours_old < 6:
         return {
             "score": SCORING_CONFIG["recency_24h_score"] + SCORING_CONFIG["recency_6h_score"],
@@ -738,17 +740,7 @@ def apply_similarity_scoring(articles: List[Dict[str, Any]], previous_titles: It
 
 
 def merge_cluster_metadata(canonical: Dict[str, Any], cluster_articles: List[Dict[str, Any]], cluster_id: int) -> Dict[str, Any]:
-    unique_sources = []
-    seen = set()
-    for article in cluster_articles:
-        source_name = article.get("source_name") or article.get("source_id") or article.get("source_type")
-        if source_name and source_name not in seen:
-            seen.add(source_name)
-            unique_sources.append(source_name)
-
     canonical["multi_source"] = len({a.get("source_type") for a in cluster_articles}) > 1
-    canonical["source_name_count"] = len(unique_sources)
-    canonical["source_names"] = unique_sources[:5]
     canonical["similarity_debug"]["duplicate_group"] = {
         "merged": len(cluster_articles) > 1,
         "cluster_size": len(cluster_articles),
@@ -815,7 +807,7 @@ def load_previous_hotspots(archive_dir: Path, days: int = 14) -> List[str]:
         return []
 
     seen_titles: List[str] = []
-    cutoff_date = (datetime.now(timezone.utc) - timedelta(days=days)).date()
+    cutoff_date = (local_now() - timedelta(days=days)).date()
     try:
         for file_path in sorted(archive_dir.rglob("daily*.json")):
             if file_path.parent.name != "json":
@@ -938,7 +930,6 @@ def serialize_article_for_output(article: Dict[str, Any]) -> Dict[str, Any]:
         "external_url",
         "name",
         "repo",
-        "display_name",
         "published_at",
     )
     for field in optional_fields:
@@ -955,7 +946,7 @@ def build_merged_output(
 ) -> Dict[str, Any]:
     distribution = {source_type: len(items) for source_type, items in source_groups.items()}
     return {
-        "generated": datetime.now(timezone.utc).isoformat(),
+        "generated": now_iso(),
         "input_stats": build_input_stats(payloads),
         "output_stats": {
             "total_articles": sum(distribution.values()),

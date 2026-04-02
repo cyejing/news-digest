@@ -44,10 +44,18 @@ class TestMergeHotspots(unittest.TestCase):
             },
         }
 
-        hotspots = merge_hotspots.build_hotspots(payload, top_n=2)
+        hotspots = merge_hotspots.build_hotspots(
+            payload,
+            top_n=2,
+            topic_metadata={
+                "ai-frontier": {"emoji": "🧠", "label": "AI Frontier / AI 前沿"},
+                "ai-infra": {"emoji": "⚙️", "label": "AI Infra / AI 基础设施"},
+            },
+        )
         self.assertEqual(hotspots["source_type_counts"]["rss"], 2)
         self.assertEqual(hotspots["source_type_counts"]["twitter"], 1)
         self.assertEqual(hotspots["topics"][0]["id"], "ai-frontier")
+        self.assertEqual(hotspots["topics"][0]["title"], "🧠 AI 前沿")
         self.assertEqual(len(hotspots["topics"][0]["items"]), 2)
 
     def test_markdown_summary_lists_source_type_counts(self):
@@ -59,9 +67,60 @@ class TestMergeHotspots(unittest.TestCase):
                 "topics": [],
             }
         )
-        self.assertIn("## Summary", markdown)
-        self.assertIn("- rss: 2", markdown)
-        self.assertIn("- twitter: 1", markdown)
+        self.assertIn("---\nsummary: mode:daily | total_articles:3 | rss:2 | twitter:1 | generated_at:2026-04-02T00:00:00+00:00\n---", markdown)
+
+    def test_markdown_item_renders_single_line_and_omits_empty_summary(self):
+        markdown = merge_hotspots.build_markdown(
+            {
+                "generated_at": "2026-04-02T00:00:00+00:00",
+                "total_articles": 2,
+                "source_type_counts": {"rss": 1},
+                "topics": [
+                    {
+                        "id": "social",
+                        "title": "🫂 社会",
+                        "items": [
+                            {
+                                "rank": 1,
+                                "title": "A",
+                                "summary": "B",
+                                "source_name": "RSS",
+                                "hotspot_score": 9.4,
+                                "metrics": {"likes": 10},
+                            },
+                            {
+                                "rank": 2,
+                                "title": "Only Title",
+                                "summary": "",
+                                "source_name": "RSS",
+                                "hotspot_score": 8.2,
+                                "metrics": {},
+                            },
+                        ],
+                    }
+                ],
+            }
+        )
+        self.assertIn("## 🫂 社会", markdown)
+        self.assertIn("1. ⭐9.4 | A - B | RSS | likes=10", markdown)
+        self.assertIn("2. ⭐8.2 | Only Title | RSS", markdown)
+        self.assertNotIn("Only Title -  |", markdown)
+
+    def test_topic_display_title_uses_topics_json_metadata(self):
+        self.assertEqual(
+            merge_hotspots.topic_display_title(
+                "ai-frontier",
+                {"ai-frontier": {"emoji": "🧠", "label": "AI Frontier / AI 前沿"}},
+            ),
+            "🧠 AI 前沿",
+        )
+        self.assertEqual(
+            merge_hotspots.topic_display_title(
+                "social",
+                {"social": {"emoji": "🫂", "label": "Social / 社会"}},
+            ),
+            "🫂 社会",
+        )
 
     def test_script_archives_json_and_markdown(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -142,6 +201,9 @@ class TestMergeHotspots(unittest.TestCase):
             archived_item = archived_payload["topics"][0]["items"][0]
             self.assertNotIn("score_debug", archived_item)
             self.assertNotIn("selection_debug", archived_item)
+            self.assertNotIn("display_name", archived_item)
+            self.assertNotIn("source_names", archived_item)
+            self.assertNotIn("source_name_count", archived_item)
 
 
 if __name__ == "__main__":

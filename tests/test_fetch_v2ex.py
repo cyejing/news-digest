@@ -32,6 +32,7 @@ class TestFetchV2EX(unittest.TestCase):
 
         self.assertIsNotNone(article)
         self.assertEqual(article["topic"], "technology")
+        self.assertEqual(article["source_name"], "V2EX Hot")
         self.assertEqual(article["replies"], 90)
 
     def test_transform_topic_keeps_non_tech_threads_with_technology_topic(self):

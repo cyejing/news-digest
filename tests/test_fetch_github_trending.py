@@ -131,8 +131,9 @@ class TestFetchGithubTrending(unittest.TestCase):
 
         self.assertEqual(result["queries_total"], 2)
         self.assertEqual(result["queries_ok"], 0)
-        self.assertEqual(result["failed_items"][0]["id"], "query one")
+        self.assertEqual(result["failed_items"], [])
         self.assertEqual(result["request_traces"][0]["status"], "error")
+        self.assertEqual(result["request_traces"][0]["source_id"], "github")
 
 
 if __name__ == "__main__":

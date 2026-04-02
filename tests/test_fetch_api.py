@@ -5,6 +5,7 @@ import importlib.util
 import json
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -53,7 +54,7 @@ class TestFetchApi(unittest.TestCase):
         self.assertIn("hacker-news-api", ids)
 
     def test_fetch_hacker_news_builds_story_articles(self):
-        def fake_http_get_json(url, headers=None, timeout=fetch_api.TIMEOUT, request_log=None):
+        def fake_http_get_json(url, headers=None, timeout=fetch_api.TIMEOUT, request_log=None, trace_context=None):
             if url.endswith("/beststories.json"):
                 return [101, 102, 103]
             if url.endswith("/item/101.json"):
@@ -114,6 +115,28 @@ class TestFetchApi(unittest.TestCase):
         self.assertIn("request_traces", result)
         self.assertTrue(result["request_traces"])
         self.assertEqual(result["request_traces"][0]["status"], "ok")
+
+    def test_fetch_wallstreetcn_uses_content_short_as_summary_only(self):
+        payload = {
+            "data": {
+                "items": [
+                    {
+                        "resource": {
+                            "title": "WallStreetCN title",
+                            "content_short": "WallStreetCN summary",
+                            "uri": "https://example.com/ws",
+                            "display_time": 1775124000,
+                        }
+                    }
+                ]
+            }
+        }
+        with patch.object(fetch_api, "http_get_json", return_value=payload):
+            articles = fetch_api.fetch_wallstreetcn(limit=1)
+
+        self.assertEqual(articles[0]["title"], "WallStreetCN title")
+        self.assertEqual(articles[0]["summary"], "WallStreetCN summary")
+        self.assertEqual(datetime.fromisoformat(articles[0]["date"]).tzinfo, fetch_api.local_now().tzinfo)
 
 
 if __name__ == "__main__":

@@ -28,7 +28,7 @@ import logging
 import tempfile
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 from urllib.parse import urlparse
@@ -37,12 +37,28 @@ from typing import Dict, List, Any, Optional
 
 try:
     from config_loader import load_merged_api_sources, load_merged_runtime_config
-    from step_contract import build_request_trace, build_step_meta, configure_slow_request_thresholds, normalize_failed_item, write_result_with_meta
+    from step_contract import (
+        build_request_trace,
+        build_step_meta,
+        configure_slow_request_thresholds,
+        from_timestamp_local,
+        local_now,
+        normalize_failed_item,
+        write_result_with_meta,
+    )
 except ImportError:
     import sys
     sys.path.append(str(Path(__file__).parent))
     from config_loader import load_merged_api_sources, load_merged_runtime_config
-    from step_contract import build_request_trace, build_step_meta, configure_slow_request_thresholds, normalize_failed_item, write_result_with_meta
+    from step_contract import (
+        build_request_trace,
+        build_step_meta,
+        configure_slow_request_thresholds,
+        from_timestamp_local,
+        local_now,
+        normalize_failed_item,
+        write_result_with_meta,
+    )
 
 try:
     import requests
@@ -127,6 +143,7 @@ def http_get_json(
     headers: Dict[str, str] = None,
     timeout: Optional[int] = None,
     request_log: Optional[List[Dict[str, Any]]] = None,
+    trace_context: Optional[Dict[str, Any]] = None,
 ) -> Dict:
     """HTTP GET JSON response."""
     req_headers = {"User-Agent": UA}
@@ -136,6 +153,7 @@ def http_get_json(
 
     apply_host_cooldown(url)
 
+    trace_context = trace_context or {}
     started_at = time.monotonic()
     try:
         if HAS_REQUESTS:
@@ -148,11 +166,36 @@ def http_get_json(
             with opener.open(req, timeout=effective_timeout) as resp:
                 payload = json.loads(resp.read().decode("utf-8", errors="replace"))
         if request_log is not None:
-            request_log.append(build_request_trace(url, time.monotonic() - started_at, status="ok", method="GET"))
+            request_log.append(
+                build_request_trace(
+                    trace_context.get("source_id") or url,
+                    url,
+                    time.monotonic() - started_at,
+                    status="ok",
+                    source_type=trace_context.get("source_type", "api"),
+                    method="GET",
+                    attempt=int(trace_context.get("attempt", 1) or 1),
+                    backend=trace_context.get("backend", "http"),
+                    adapter=trace_context.get("adapter", ""),
+                )
+            )
         return payload
-    except Exception:
+    except Exception as exc:
         if request_log is not None:
-            request_log.append(build_request_trace(url, time.monotonic() - started_at, status="error", method="GET"))
+            request_log.append(
+                build_request_trace(
+                    trace_context.get("source_id") or url,
+                    url,
+                    time.monotonic() - started_at,
+                    status="error",
+                    source_type=trace_context.get("source_type", "api"),
+                    method="GET",
+                    attempt=int(trace_context.get("attempt", 1) or 1),
+                    backend=trace_context.get("backend", "http"),
+                    adapter=trace_context.get("adapter", ""),
+                    error=str(exc)[:300],
+                )
+            )
         raise
 
 
@@ -161,7 +204,12 @@ def fetch_weibo(limit: int = 15, request_log: Optional[List[Dict[str, Any]]] = N
     articles = []
     try:
         headers = {"Referer": "https://weibo.com/"}
-        data = http_get_json("https://weibo.com/ajax/side/hotSearch", headers=headers, request_log=request_log)
+        data = http_get_json(
+            "https://weibo.com/ajax/side/hotSearch",
+            headers=headers,
+            request_log=request_log,
+            trace_context={"source_id": "weibo-api", "source_type": "api", "backend": "weibo-api", "adapter": "weibo/hot"},
+        )
         
         items = data.get('data', {}).get('realtime', [])
         
@@ -176,7 +224,8 @@ def fetch_weibo(limit: int = 15, request_log: Optional[List[Dict[str, Any]]] = N
             articles.append({
                 "title": title[:200],
                 "link": url,
-                "date": datetime.now(timezone.utc).isoformat(),
+                "date": local_now().isoformat(),
+                "summary": "",
                 "source_id": "weibo-api",
                 "source_type": "api",
                 "source_name": "Weibo Hot Search",
@@ -193,18 +242,27 @@ def fetch_wallstreetcn(limit: int = 15, request_log: Optional[List[Dict[str, Any
     articles = []
     try:
         url = "https://api-one.wallstcn.com/apiv1/content/information-flow?channel=global-channel&accept=article&limit=30"
-        data = http_get_json(url, request_log=request_log)
+        data = http_get_json(
+            url,
+            request_log=request_log,
+            trace_context={"source_id": "wallstreetcn-api", "source_type": "api", "backend": "wallstreetcn-api", "adapter": "wallstreetcn/feed"},
+        )
         
         for item in data.get('data', {}).get('items', [])[:limit]:
             res = item.get('resource')
             if res and (res.get('title') or res.get('content_short')):
                 ts = res.get('display_time', 0)
-                time_str = datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M') if ts else ""
+                time_str = from_timestamp_local(ts).isoformat() if ts else ""
+                title = (res.get('title') or '').strip()
+                summary = (res.get('content_short') or '').strip()
+                if not title and not summary:
+                    continue
                 
                 articles.append({
-                    "title": (res.get('title') or res.get('content_short', ''))[:200],
+                    "title": (title or summary)[:200],
                     "link": res.get('uri', ''),
                     "date": time_str,
+                    "summary": summary[:500],
                     "source_id": "wallstreetcn-api",
                     "source_type": "api",
                     "source_name": "Wall Street CN",
@@ -221,13 +279,19 @@ def fetch_tencent(limit: int = 15, request_log: Optional[List[Dict[str, Any]]] =
     try:
         headers = {"Referer": "https://news.qq.com/"}
         url = "https://i.news.qq.com/web_backend/v2/getTagInfo?tagId=aEWqxLtdgmQ%3D"
-        data = http_get_json(url, headers=headers, request_log=request_log)
+        data = http_get_json(
+            url,
+            headers=headers,
+            request_log=request_log,
+            trace_context={"source_id": "tencent-api", "source_type": "api", "backend": "tencent-api", "adapter": "tencent/news"},
+        )
         
         for news in data.get('data', {}).get('tabs', [{}])[0].get('articleList', [])[:limit]:
             articles.append({
                 "title": news.get('title', '')[:200],
                 "link": news.get('url') or news.get('link_info', {}).get('url', ''),
                 "date": news.get('pub_time', '') or news.get('publish_time', ''),
+                "summary": (news.get('abstract') or news.get('intro') or news.get('desc') or '')[:500],
                 "source_id": "tencent-api",
                 "source_type": "api",
                 "source_name": "Tencent News",
@@ -245,12 +309,14 @@ def fetch_hacker_news(limit: int = 15, request_log: Optional[List[Dict[str, Any]
         story_ids = http_get_json(
             "https://hacker-news.firebaseio.com/v0/beststories.json",
             request_log=request_log,
+            trace_context={"source_id": "hacker-news-api", "source_type": "api", "backend": "hacker-news-api", "adapter": "hacker-news/beststories"},
         ) or []
 
         for story_id in story_ids[: max(limit * 3, limit)]:
             item = http_get_json(
                 f"https://hacker-news.firebaseio.com/v0/item/{story_id}.json",
                 request_log=request_log,
+                trace_context={"source_id": "hacker-news-api", "source_type": "api", "backend": "hacker-news-api", "adapter": "hacker-news/item"},
             )
             if not isinstance(item, dict):
                 continue
@@ -265,7 +331,7 @@ def fetch_hacker_news(limit: int = 15, request_log: Optional[List[Dict[str, Any]
             timestamp = item.get("time")
             date_iso = ""
             if isinstance(timestamp, (int, float)):
-                date_iso = datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
+                date_iso = from_timestamp_local(timestamp).isoformat()
 
             articles.append({
                 "title": title[:200],
@@ -328,7 +394,19 @@ def fetch_source(source: Dict[str, Any], limit: int = 15) -> Dict[str, Any]:
             "count": 0,
             "articles": [],
             "request_traces": request_log,
-            "failed_items": [normalize_failed_item(source_id, f"Unknown source: {source_id}", time.monotonic() - started_at)],
+            "failed_items": [
+                normalize_failed_item(
+                    source_id,
+                    f"Unknown source: {source_id}",
+                    time.monotonic() - started_at,
+                    source_type="api",
+                    target=source_id,
+                    method="INTERNAL",
+                    attempt=1,
+                    backend="fetch-api",
+                    adapter="api/source-router",
+                )
+            ],
         }
     
     try:
@@ -365,7 +443,19 @@ def fetch_source(source: Dict[str, Any], limit: int = 15) -> Dict[str, Any]:
             "count": 0,
             "articles": [],
             "request_traces": request_log,
-            "failed_items": [normalize_failed_item(source_id, str(e)[:100], time.monotonic() - started_at)],
+            "failed_items": [
+                normalize_failed_item(
+                    source_id,
+                    str(e)[:100],
+                    time.monotonic() - started_at,
+                    source_type="api",
+                    target=source_id,
+                    method="INTERNAL",
+                    attempt=1,
+                    backend="fetch-api",
+                    adapter="api/source-fetch",
+                )
+            ],
         }
 
 def parse_args() -> argparse.Namespace:
@@ -424,14 +514,8 @@ def main() -> int:
         ok_count = sum(1 for r in results if r["status"] == "ok")
         total_articles = sum(r.get("count", 0) for r in results)
         articles = [article for result in results for article in result.get("articles", []) if isinstance(article, dict)]
-        failed_items = [
-            normalize_failed_item(result.get("source_id"), result.get("error"), result.get("elapsed_s"))
-            for result in results
-            if result.get("status") != "ok"
-        ]
-
         output = {
-            "generated": datetime.now(timezone.utc).isoformat(),
+            "generated": local_now().isoformat(),
             "source_type": "api",
             "articles": articles,
         }
@@ -439,11 +523,12 @@ def main() -> int:
         meta = build_step_meta(
             step_key="api",
             status="ok" if ok_count == len(results) and total_articles > 0 else ("partial" if ok_count > 0 and total_articles > 0 else "error"),
-            elapsed_s=time.monotonic() - step_started_at,
+            elapsed_active_s=sum(float(trace.get("elapsed_s", 0) or 0) for trace in request_traces),
+            elapsed_total_s=time.monotonic() - step_started_at,
             items=total_articles,
             calls_total=len(results),
             calls_ok=ok_count,
-            failed_items=failed_items,
+            failed_items=None,
             request_traces=request_traces,
         )
         write_result_with_meta(args.output, output, meta)

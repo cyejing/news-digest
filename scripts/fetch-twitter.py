@@ -31,17 +31,33 @@ import subprocess
 import sys
 import tempfile
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 try:
     from config_loader import load_merged_runtime_config, load_merged_twitter_sources, load_merged_topics
-    from step_contract import build_request_trace, build_step_meta, configure_slow_request_thresholds, normalize_failed_item, write_result_with_meta
+    from step_contract import (
+        build_request_trace,
+        build_step_meta,
+        configure_slow_request_thresholds,
+        local_now,
+        normalize_failed_item,
+        to_local_datetime,
+        write_result_with_meta,
+    )
 except ImportError:
     sys.path.append(str(Path(__file__).parent))
     from config_loader import load_merged_runtime_config, load_merged_twitter_sources, load_merged_topics
-    from step_contract import build_request_trace, build_step_meta, configure_slow_request_thresholds, normalize_failed_item, write_result_with_meta
+    from step_contract import (
+        build_request_trace,
+        build_step_meta,
+        configure_slow_request_thresholds,
+        local_now,
+        normalize_failed_item,
+        to_local_datetime,
+        write_result_with_meta,
+    )
 
 COOLDOWN_SECONDS = 7.0
 DEFAULT_TIMEOUT = 180
@@ -49,6 +65,13 @@ DEFAULT_COUNT = 20
 RESULTS_PER_QUERY = 10
 TWITTER_DATE_FORMAT = "%a %b %d %H:%M:%S %z %Y"
 _last_success_at: Optional[float] = None
+_last_request_elapsed_s: Optional[float] = None
+
+
+class TimedRuntimeError(RuntimeError):
+    def __init__(self, message: str, elapsed_s: float):
+        super().__init__(message)
+        self.elapsed_s = elapsed_s
 
 
 def setup_logging(verbose: bool) -> logging.Logger:
@@ -83,10 +106,20 @@ def apply_runtime_config(defaults_dir: Path, config_dir: Optional[Path] = None) 
     return runtime
 
 
+def clear_last_request_elapsed() -> None:
+    global _last_request_elapsed_s
+    _last_request_elapsed_s = None
+
+
+def last_request_elapsed(default: float = 0.0) -> float:
+    return float(_last_request_elapsed_s if _last_request_elapsed_s is not None else default)
+
+
 def run_bb_browser_site(args: Sequence[str], timeout: Optional[int] = None) -> Dict[str, Any]:
-    global _last_success_at
+    global _last_success_at, _last_request_elapsed_s
     throttle_after_success()
     effective_timeout = int(timeout if timeout is not None else DEFAULT_TIMEOUT)
+    request_started_at = time.monotonic()
     result = subprocess.run(
         ["bb-browser", "site", *args],
         capture_output=True,
@@ -94,14 +127,16 @@ def run_bb_browser_site(args: Sequence[str], timeout: Optional[int] = None) -> D
         timeout=effective_timeout,
         env=os.environ,
     )
+    elapsed_s = time.monotonic() - request_started_at
+    _last_request_elapsed_s = elapsed_s
     if result.returncode != 0:
         message = (result.stderr or result.stdout or "bb-browser command failed").strip()
-        raise RuntimeError(message)
+        raise TimedRuntimeError(message, elapsed_s)
 
     try:
         payload = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Invalid JSON from bb-browser: {exc}") from exc
+        raise TimedRuntimeError(f"Invalid JSON from bb-browser: {exc}", elapsed_s) from exc
 
     _last_success_at = time.monotonic()
     return payload
@@ -126,7 +161,7 @@ def parse_twitter_datetime(value: str) -> Optional[datetime]:
     if not value:
         return None
     try:
-        return datetime.strptime(value, TWITTER_DATE_FORMAT).astimezone(timezone.utc)
+        return to_local_datetime(datetime.strptime(value, TWITTER_DATE_FORMAT))
     except ValueError:
         return None
 
@@ -183,8 +218,21 @@ def extract_tweets(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     return []
 
 
-def parse_tweet(item: Dict[str, Any], topic_id: str, cutoff: datetime, query: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def parse_tweet(
+    item: Dict[str, Any],
+    topic_id: str,
+    cutoff: datetime,
+    query: Optional[str] = None,
+    source_name: str = "",
+) -> Optional[Dict[str, Any]]:
     text = truncate_text(item.get("text", item.get("full_text", "")))
+    summary = truncate_text(
+        item.get("note_tweet")
+        or item.get("note_tweet_text")
+        or item.get("summary")
+        or item.get("description")
+        or ""
+    )
     link = item.get("url", item.get("link", ""))
     if not text or not link:
         return None
@@ -204,7 +252,8 @@ def parse_tweet(item: Dict[str, Any], topic_id: str, cutoff: datetime, query: Op
         "link": link,
         "date": tweet_dt.isoformat(),
         "topic": topic_id,
-        "summary": text,
+        "summary": summary,
+        "source_name": str(source_name or item.get("author") or item.get("username") or "Twitter").strip(),
         "metrics": {
             "like_count": likes,
             "retweet_count": retweets,
@@ -231,19 +280,23 @@ def fetch_timeline(source: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def fetch_source(source: Dict[str, Any], cutoff: datetime) -> Dict[str, Any]:
-    started_at = time.monotonic()
     try:
+        clear_last_request_elapsed()
         payload = fetch_timeline(source)
+        elapsed_s = last_request_elapsed()
         articles = []
         for item in extract_tweets(payload):
-            article = parse_tweet(item, str(source.get("topic") or ""), cutoff)
+            article = parse_tweet(item, str(source.get("topic") or ""), cutoff, source_name=str(source.get("name") or source.get("handle") or source.get("id") or "Twitter"))
             if article:
                 articles.append(article)
-        elapsed_s = time.monotonic() - started_at
         request_trace = build_request_trace(
+            source.get("id") or source.get("handle") or "unknown",
             source.get("handle") or source.get("id", "unknown"),
             elapsed_s,
             status="ok",
+            source_type="twitter",
+            method="CLI",
+            attempt=1,
             backend="bb-browser",
             adapter="twitter/tweets",
         )
@@ -264,11 +317,15 @@ def fetch_source(source: Dict[str, Any], cutoff: datetime) -> Dict[str, Any]:
             "failed_items": [],
         }
     except Exception as exc:
-        elapsed_s = time.monotonic() - started_at
+        elapsed_s = getattr(exc, "elapsed_s", 0.0)
         request_trace = build_request_trace(
+            source.get("id") or source.get("handle") or "unknown",
             source.get("handle") or source.get("id", "unknown"),
             elapsed_s,
             status="error",
+            source_type="twitter",
+            method="CLI",
+            attempt=1,
             backend="bb-browser",
             adapter="twitter/tweets",
             error=str(exc)[:200],
@@ -288,7 +345,7 @@ def fetch_source(source: Dict[str, Any], cutoff: datetime) -> Dict[str, Any]:
             "count": 0,
             "articles": [],
             "request_traces": [request_trace],
-            "failed_items": [normalize_failed_item(source.get("id"), str(exc)[:200], elapsed_s)],
+            "failed_items": [],
         }
 
 
@@ -300,41 +357,67 @@ def fetch_topic(topic: Dict[str, Any], cutoff: datetime, logger: logging.Logger)
 
     dedup_by_url: Dict[str, Dict[str, Any]] = {}
     request_traces: List[Dict[str, Any]] = []
-    started_at = time.monotonic()
-    failed_items: List[Dict[str, Any]] = []
+    total_request_elapsed_s = 0.0
     ok_queries = 0
 
     for query in queries:
         compiled_query = build_twitter_query(query, exclude)
-        query_started_at = time.monotonic()
         try:
+            clear_last_request_elapsed()
             payload = run_bb_browser_site(["twitter/search", compiled_query, str(per_query), "latest"])
+            elapsed_s = last_request_elapsed()
             tweets = extract_tweets(payload)
             kept = 0
             for item in tweets:
                 article = parse_tweet(item, topic.get("id"), cutoff, compiled_query)
                 if not article:
                     continue
+                article["source_name"] = article.get("author") or "Twitter Search"
                 dedup_by_url.setdefault(article["link"], article)
                 kept += 1
-            elapsed_s = time.monotonic() - query_started_at
-            request_traces.append(build_request_trace(compiled_query, elapsed_s, status="ok", backend="bb-browser", adapter="twitter/search"))
+            total_request_elapsed_s += elapsed_s
+            request_traces.append(
+                build_request_trace(
+                    topic.get("id") or compiled_query,
+                    compiled_query,
+                    elapsed_s,
+                    status="ok",
+                    source_type="twitter",
+                    method="CLI",
+                    attempt=1,
+                    backend="bb-browser",
+                    adapter="twitter/search",
+                )
+            )
             ok_queries += 1
         except Exception as exc:
             logger.warning("Twitter query failed [%s]: %s", topic.get("id"), exc)
-            elapsed_s = time.monotonic() - query_started_at
-            request_traces.append(build_request_trace(compiled_query, elapsed_s, status="error", backend="bb-browser", adapter="twitter/search", error=str(exc)[:200]))
-            failed_items.append(normalize_failed_item(compiled_query, str(exc)[:200], elapsed_s))
+            elapsed_s = getattr(exc, "elapsed_s", last_request_elapsed())
+            total_request_elapsed_s += elapsed_s
+            request_traces.append(
+                build_request_trace(
+                    topic.get("id") or compiled_query,
+                    compiled_query,
+                    elapsed_s,
+                    status="error",
+                    source_type="twitter",
+                    method="CLI",
+                    attempt=1,
+                    backend="bb-browser",
+                    adapter="twitter/search",
+                    error=str(exc)[:200],
+                )
+            )
 
     articles = list(dedup_by_url.values())
     articles.sort(key=lambda article: article.get("date", ""), reverse=True)
     return {
         "topic_id": topic.get("id"),
         "status": "ok" if articles else "error",
-        "elapsed_s": round(time.monotonic() - started_at, 3),
+        "elapsed_s": round(total_request_elapsed_s, 3),
         "calls_total": len(queries),
         "calls_ok": ok_queries,
-        "failed_items": failed_items,
+        "failed_items": [],
         "request_traces": request_traces,
         "items": len(articles),
         "count": len(articles),
@@ -374,7 +457,7 @@ def main() -> int:
     try:
         sources = load_sources(args.defaults, effective_config_dir)
         topics = load_merged_topics(args.defaults, effective_config_dir)
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=args.hours)
+        cutoff = local_now() - timedelta(hours=args.hours)
         step_started_at = time.monotonic()
         logger.info("Fetching %d Twitter sources and %d topic query groups sequentially", len(sources), len(topics))
         logger.info("Twitter bb-browser cooldown: %.1fs", COOLDOWN_SECONDS)
@@ -396,22 +479,23 @@ def main() -> int:
         ok_calls = ok_sources + ok_query_calls
         articles = [article for result in source_results for article in result.get("articles", []) if isinstance(article, dict)]
         articles.extend(article for result in topic_results for article in result.get("articles", []) if isinstance(article, dict))
-        failed_items = [item for result in [*source_results, *topic_results] for item in result.get("failed_items", []) if isinstance(item, dict)]
         request_traces = [trace for result in [*source_results, *topic_results] for trace in result.get("request_traces", []) if isinstance(trace, dict)]
+        effective_elapsed_s = sum(float(result.get("elapsed_s", 0) or 0) for result in [*source_results, *topic_results])
 
         output = {
-            "generated": datetime.now(timezone.utc).isoformat(),
+            "generated": local_now().isoformat(),
             "source_type": "twitter",
             "articles": articles,
         }
         meta = build_step_meta(
             step_key="twitter",
             status="ok" if ok_calls == total_calls and total_articles > 0 else ("partial" if ok_calls > 0 and total_articles > 0 else "error"),
-            elapsed_s=time.monotonic() - step_started_at,
+            elapsed_active_s=effective_elapsed_s,
+            elapsed_total_s=time.monotonic() - step_started_at,
             items=total_articles,
             calls_total=total_calls,
             calls_ok=ok_calls,
-            failed_items=failed_items,
+            failed_items=None,
             request_traces=request_traces,
         )
         write_result_with_meta(args.output, output, meta)

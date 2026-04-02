@@ -5,7 +5,9 @@ import json
 import tempfile
 import textwrap
 import unittest
+from datetime import timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).parent.parent
 MODULE_PATH = ROOT / "scripts" / "run-pipeline.py"
@@ -97,6 +99,35 @@ class TestRunPipeline(unittest.TestCase):
             self.assertEqual(result.status, "timeout")
             self.assertIn("Killed after 1s", result.stderr_tail[-1])
 
+    def test_run_step_process_keeps_longer_stderr_tail(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            script_path = tmp / "stderr.py"
+            script_path.write_text(
+                "import sys\nfor i in range(150):\n    print(f'err-{i}', file=sys.stderr)\nsys.exit(1)\n",
+                encoding="utf-8",
+            )
+            spec = run_pipeline.StepSpec(
+                step_key="test",
+                name="Test",
+                script_name=str(script_path),
+                args=[],
+                output_path=None,
+                timeout_s=10,
+            )
+
+            original_dir = run_pipeline.SCRIPTS_DIR
+            run_pipeline.SCRIPTS_DIR = tmp
+            try:
+                result = run_pipeline.run_step_process(spec)
+            finally:
+                run_pipeline.SCRIPTS_DIR = original_dir
+
+            self.assertEqual(result.status, "error")
+            self.assertEqual(len(result.stderr_tail), run_pipeline.PROCESS_LOG_TAIL_LINES)
+            self.assertEqual(result.stderr_tail[0], "err-50")
+            self.assertEqual(result.stderr_tail[-1], "err-149")
+
     def test_build_fetch_specs_uses_unified_step_keys(self):
         runtime = {"pipeline": {"fetch_step_timeout_s": 99}}
         specs = run_pipeline.build_fetch_step_specs(
@@ -129,14 +160,60 @@ class TestRunPipeline(unittest.TestCase):
     def test_build_pipeline_meta_reports_partial_when_only_some_outputs_exist(self):
         meta = run_pipeline.build_pipeline_meta(
             runtime={"fetch": {}, "pipeline": {}},
-            step_summaries={"rss": {"status": "ok"}, "google": {"status": "error"}},
+            step_summaries={
+                "rss": {"status": "ok", "items": 3, "elapsed_s": 4.2, "calls_total": 2, "calls_ok": 2, "failed_calls": 0, "failed_items": [], "slow_requests": {"total_count": 1}},
+                "google": {"status": "error", "items": 0, "elapsed_s": 6.1, "calls_total": 2, "calls_ok": 0, "failed_calls": 2, "failed_items": [{"source_id": "ai", "error": "boom"}], "slow_requests": {"total_count": 2}},
+            },
             outputs={},
             archive_root=Path("/tmp/archive"),
             cleaned_archives=1,
             started_at=0.0,
+            fetch_elapsed_s=12.3,
         )
         self.assertEqual(meta["status"], "partial")
         self.assertEqual(meta["cleaned_archives"], 1)
+        self.assertEqual(meta["fetch_elapsed_s"], 12.3)
+        rss = meta["source_type_overview"]["rss"]
+        google = meta["source_type_overview"]["google"]
+        self.assertTrue(rss["fully_successful"])
+        self.assertEqual(rss["slow_requests_count"], 1)
+        self.assertFalse(google["fully_successful"])
+        self.assertEqual(google["failed_items_count"], 1)
+
+    def test_cleanup_archive_root_uses_local_dates(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            archive_root = Path(tmpdir)
+            recent = archive_root / (run_pipeline.local_now() - timedelta(days=1)).strftime("%Y-%m-%d")
+            old = archive_root / (run_pipeline.local_now() - timedelta(days=10)).strftime("%Y-%m-%d")
+            recent.mkdir()
+            old.mkdir()
+
+            removed = run_pipeline.cleanup_archive_root(archive_root, retention_days=7)
+
+        self.assertEqual(removed, 1)
+
+    def test_archive_step_meta_uses_local_date_dir(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            meta_file = root / "rss.meta.json"
+            meta_file.write_text("{}", encoding="utf-8")
+
+            archived = run_pipeline.archive_step_meta(meta_file, root / "archive")
+
+            self.assertIsNotNone(archived)
+            self.assertIn(run_pipeline.local_today_iso(), str(archived))
+
+    def test_archive_step_meta_supports_pipeline_meta(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            meta_file = root / "pipeline.meta.json"
+            meta_file.write_text("{}", encoding="utf-8")
+
+            archived = run_pipeline.archive_step_meta(meta_file, root / "archive")
+
+            self.assertIsNotNone(archived)
+            self.assertTrue(str(archived).endswith("pipeline.meta.json"))
+            self.assertIn(run_pipeline.local_today_iso(), str(archived))
 
 
 if __name__ == "__main__":

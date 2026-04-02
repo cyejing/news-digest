@@ -32,7 +32,7 @@ import argparse
 import logging
 import tempfile
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from urllib.parse import quote
@@ -41,11 +41,11 @@ from urllib.error import HTTPError, URLError
 
 try:
     from config_loader import load_merged_runtime_config
-    from step_contract import build_request_trace, build_step_meta, configure_slow_request_thresholds, normalize_failed_item, write_result_with_meta
+    from step_contract import build_request_trace, build_step_meta, configure_slow_request_thresholds, local_now, normalize_failed_item, to_local_datetime, write_result_with_meta
 except ImportError:
     sys.path.append(str(Path(__file__).parent))
     from config_loader import load_merged_runtime_config
-    from step_contract import build_request_trace, build_step_meta, configure_slow_request_thresholds, normalize_failed_item, write_result_with_meta
+    from step_contract import build_request_trace, build_step_meta, configure_slow_request_thresholds, local_now, normalize_failed_item, to_local_datetime, write_result_with_meta
 
 # ==================== 常量配置 ====================
 TIMEOUT = 60  # 请求超时时间（秒）
@@ -199,7 +199,7 @@ def fetch_trending_repos(hours: int = 48, github_token: Optional[str] = None,
             "failed_items": [],
         }
     
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    cutoff = local_now() - timedelta(hours=hours)
     cutoff_str = cutoff.strftime("%Y-%m-%d")
 
     headers = {
@@ -240,7 +240,7 @@ def fetch_trending_repos(hours: int = 48, github_token: Optional[str] = None,
 
                 # 估算每日星标增长
                 created = parse_github_date(item.get("created_at", ""))
-                age_days = max(1, (datetime.now(timezone.utc) - created).days) if created else 365
+                age_days = max(1, (local_now() - to_local_datetime(created)).days) if created else 365
                 stars = item.get("stargazers_count", 0)
                 daily_stars = round(stars / age_days)
 
@@ -259,16 +259,55 @@ def fetch_trending_repos(hours: int = 48, github_token: Optional[str] = None,
                     "source_type": "github_trending",
                 })
 
-            request_traces.append(build_request_trace(tq["q"], url, time.monotonic() - query_started_at, status="ok", topic=tq["topic"], backend="github-api"))
+            request_traces.append(
+                build_request_trace(
+                    tq["topic"],
+                    url,
+                    time.monotonic() - query_started_at,
+                    status="ok",
+                    source_type="github_trending",
+                    method="GET",
+                    attempt=1,
+                    topic=tq["topic"],
+                    backend="github-api",
+                    adapter="github/search",
+                )
+            )
             logging.debug(f"Trending [{tq['topic']}]: {len(data.get('items', []))} repos")
 
         except HTTPError as e:
-            failed_items.append(normalize_failed_item(tq["q"], f"HTTP {e.code}", 0))
-            request_traces.append(build_request_trace(tq["q"], url, 0, status="error", error=f"HTTP {e.code}", topic=tq["topic"], backend="github-api"))
+            request_traces.append(
+                build_request_trace(
+                    tq["topic"],
+                    url,
+                    time.monotonic() - query_started_at,
+                    status="error",
+                    source_type="github_trending",
+                    method="GET",
+                    attempt=1,
+                    error=f"HTTP {e.code}",
+                    topic=tq["topic"],
+                    backend="github-api",
+                    adapter="github/search",
+                )
+            )
             logging.warning(f"GitHub trending search error [{tq['topic']}]: HTTP {e.code}")
         except Exception as e:
-            failed_items.append(normalize_failed_item(tq["q"], str(e)[:180], 0))
-            request_traces.append(build_request_trace(tq["q"], url, 0, status="error", error=str(e)[:180], topic=tq["topic"], backend="github-api"))
+            request_traces.append(
+                build_request_trace(
+                    tq["topic"],
+                    url,
+                    time.monotonic() - query_started_at,
+                    status="error",
+                    source_type="github_trending",
+                    method="GET",
+                    attempt=1,
+                    error=str(e)[:180],
+                    topic=tq["topic"],
+                    backend="github-api",
+                    adapter="github/search",
+                )
+            )
             logging.warning(f"GitHub trending search error [{tq['topic']}]: {e}")
         finally:
             last_finished_at = time.time()
@@ -281,7 +320,7 @@ def fetch_trending_repos(hours: int = 48, github_token: Optional[str] = None,
         "queries_total": len(request_traces),
         "queries_ok": sum(1 for trace in request_traces if trace.get("status") == "ok"),
         "request_traces": request_traces,
-        "failed_items": failed_items,
+        "failed_items": [],
     }
 
 def parse_args() -> argparse.Namespace:
@@ -324,13 +363,13 @@ def main() -> int:
     repos = trending_result["repos"]
 
     output = {
-        "generated": datetime.now(timezone.utc).isoformat(),
+        "generated": local_now().isoformat(),
         "source_type": "github_trending",
         "articles": [
             {
                 "title": f"{repo['repo']}: {repo['description']}" if repo.get("description") else repo["repo"],
                 "link": repo.get("url", f"https://github.com/{repo['repo']}"),
-                "date": repo.get("pushed_at", ""),
+                "date": to_local_datetime(parse_github_date(repo.get("pushed_at", ""))).isoformat() if parse_github_date(repo.get("pushed_at", "")) else "",
                 "topic": str(repo.get("topic") or "github"),
                 "source_type": "github_trending",
                 "source_id": f"github-trending-{repo['repo']}",
@@ -350,11 +389,12 @@ def main() -> int:
     meta = build_step_meta(
         step_key="github_trending",
         status="ok" if trending_result["queries_ok"] == trending_result["queries_total"] and len(repos) > 0 else ("partial" if trending_result["queries_ok"] > 0 and len(repos) > 0 else "error"),
-        elapsed_s=time.monotonic() - step_started_at,
+        elapsed_active_s=sum(float(trace.get("elapsed_s", 0) or 0) for trace in trending_result.get("request_traces", [])),
+        elapsed_total_s=time.monotonic() - step_started_at,
         items=len(repos),
         calls_total=trending_result["queries_total"],
         calls_ok=trending_result["queries_ok"],
-        failed_items=trending_result.get("failed_items", []),
+        failed_items=None,
         request_traces=trending_result.get("request_traces", []),
     )
     write_result_with_meta(out_path, output, meta)

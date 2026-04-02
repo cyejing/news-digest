@@ -26,6 +26,7 @@ class TestFetchWeibo(unittest.TestCase):
 
         self.assertIsNotNone(article)
         self.assertEqual(article["topic"], "social")
+        self.assertEqual(article["source_name"], "Weibo Hot")
         self.assertEqual(article["hot_score"], 8530000)
         self.assertIn("s.weibo.com/weibo?q=", article["link"])
 

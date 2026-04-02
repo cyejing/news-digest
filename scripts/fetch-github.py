@@ -33,7 +33,7 @@ import argparse
 import logging
 import time
 import tempfile
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from urllib.request import urlopen, Request
 from urllib.error import HTTPError, URLError
 from pathlib import Path
@@ -46,10 +46,10 @@ except ImportError:
     from config_loader import load_merged_runtime_config, load_merged_github_sources
 
 try:
-    from step_contract import build_request_trace, build_step_meta, configure_slow_request_thresholds, normalize_failed_item, write_result_with_meta
+    from step_contract import build_request_trace, build_step_meta, configure_slow_request_thresholds, local_now, normalize_failed_item, to_local_datetime, write_result_with_meta
 except ImportError:
     sys.path.append(str(Path(__file__).parent))
-    from step_contract import build_request_trace, build_step_meta, configure_slow_request_thresholds, normalize_failed_item, write_result_with_meta
+    from step_contract import build_request_trace, build_step_meta, configure_slow_request_thresholds, local_now, normalize_failed_item, to_local_datetime, write_result_with_meta
 
 TIMEOUT = 25
 MAX_RELEASES_PER_REPO = 20
@@ -233,6 +233,7 @@ def fetch_releases_with_retry(source: Dict[str, Any], cutoff: datetime, github_t
     topic = str(source.get("topic") or "")
     started_at = time.monotonic()
     request_log: List[Dict[str, Any]] = []
+    active_elapsed_s = 0.0
     
     repo_name = get_repo_name(repo)
     api_url = f"https://api.github.com/repos/{repo}/releases"
@@ -276,14 +277,22 @@ def fetch_releases_with_retry(source: Dict[str, Any], cutoff: datetime, github_t
             except HTTPError as e:
                 if e.code == 304:
                     logging.info(f"⏭ {name}: not modified (304)")
+                    attempt_elapsed = round(time.monotonic() - request_started_at, 3)
+                    total_elapsed = round(time.monotonic() - started_at, 3)
+                    active_elapsed_s += attempt_elapsed
                     request_log.append(
                         build_request_trace(
+                            source_id,
                             api_url,
-                            time.monotonic() - request_started_at,
+                            attempt_elapsed,
                             status="ok",
+                            source_type="github",
                             method="GET",
                             attempt=attempt + 1,
+                            backend="github-api",
+                            adapter="github/releases",
                             result="not_modified",
+                            elapsed_total_s=total_elapsed,
                         )
                     )
                     return {
@@ -295,7 +304,8 @@ def fetch_releases_with_retry(source: Dict[str, Any], cutoff: datetime, github_t
                         "topic": topic,
                         "status": "ok",
                         "attempts": attempt + 1,
-                        "elapsed_s": round(time.monotonic() - started_at, 3),
+                        "elapsed_s": round(active_elapsed_s, 3),
+                        "total_elapsed_s": total_elapsed,
                         "not_modified": True,
                         "count": 0,
                         "articles": [],
@@ -304,13 +314,21 @@ def fetch_releases_with_retry(source: Dict[str, Any], cutoff: datetime, github_t
                     }
                 raise
 
+            attempt_elapsed = round(time.monotonic() - request_started_at, 3)
+            total_elapsed = round(time.monotonic() - started_at, 3)
+            active_elapsed_s += attempt_elapsed
             request_log.append(
                 build_request_trace(
+                    source_id,
                     api_url,
-                    time.monotonic() - request_started_at,
+                    attempt_elapsed,
                     status="ok",
+                    source_type="github",
                     method="GET",
                     attempt=attempt + 1,
+                    backend="github-api",
+                    adapter="github/releases",
+                    elapsed_total_s=total_elapsed,
                 )
             )
             
@@ -325,7 +343,10 @@ def fetch_releases_with_retry(source: Dict[str, Any], cutoff: datetime, github_t
                     continue
                 
                 pub_date = parse_github_date(published_at)
-                if not pub_date or pub_date < cutoff:
+                if not pub_date:
+                    continue
+                local_pub_date = to_local_datetime(pub_date)
+                if local_pub_date < cutoff:
                     continue
                 
                 tag_name = release.get("tag_name", "")
@@ -338,9 +359,10 @@ def fetch_releases_with_retry(source: Dict[str, Any], cutoff: datetime, github_t
                     articles.append({
                         "title": title,
                         "link": link,
-                        "date": pub_date.isoformat(),
+                        "date": local_pub_date.isoformat(),
                         "summary": summary,
                         "topic": topic,
+                        "source_name": name,
                     })
             
             return {
@@ -352,7 +374,8 @@ def fetch_releases_with_retry(source: Dict[str, Any], cutoff: datetime, github_t
                 "topic": topic,
                 "status": "ok",
                 "attempts": attempt + 1,
-                "elapsed_s": round(time.monotonic() - started_at, 3),
+                "elapsed_s": round(active_elapsed_s, 3),
+                "total_elapsed_s": total_elapsed,
                 "items": len(articles),
                 "count": len(articles),
                 "articles": articles,
@@ -362,16 +385,6 @@ def fetch_releases_with_retry(source: Dict[str, Any], cutoff: datetime, github_t
             
         except Exception as e:
             error_msg = str(e)[:100]
-            request_log.append(
-                build_request_trace(
-                    api_url,
-                    time.monotonic() - request_started_at,
-                    status="error",
-                    method="GET",
-                    attempt=attempt + 1,
-                    error=error_msg,
-                )
-            )
             logging.debug(f"Attempt {attempt + 1} failed for {name}: {error_msg}")
             
             if attempt < RETRY_COUNT and is_retryable_github_error(e):
@@ -380,6 +393,24 @@ def fetch_releases_with_retry(source: Dict[str, Any], cutoff: datetime, github_t
                 time.sleep(delay)
                 continue
             else:
+                attempt_elapsed = round(time.monotonic() - request_started_at, 3)
+                total_elapsed = round(time.monotonic() - started_at, 3)
+                active_elapsed_s += attempt_elapsed
+                request_log.append(
+                    build_request_trace(
+                        source_id,
+                        api_url,
+                        attempt_elapsed,
+                        status="error",
+                        source_type="github",
+                        method="GET",
+                        attempt=attempt + 1,
+                        backend="github-api",
+                        adapter="github/releases",
+                        error=error_msg,
+                        elapsed_total_s=total_elapsed,
+                    )
+                )
                 return {
                     "source_id": source_id,
                     "source_type": "github",
@@ -390,12 +421,13 @@ def fetch_releases_with_retry(source: Dict[str, Any], cutoff: datetime, github_t
                     "status": "error",
                     "attempts": attempt + 1,
                     "error": error_msg,
-                    "elapsed_s": round(time.monotonic() - started_at, 3),
+                    "elapsed_s": round(active_elapsed_s, 3),
+                    "total_elapsed_s": total_elapsed,
                     "items": 0,
                     "count": 0,
                     "articles": [],
                     "request_traces": request_log,
-                    "failed_items": [normalize_failed_item(source_id, error_msg, time.monotonic() - started_at)],
+                    "failed_items": [],
                 }
 
 
@@ -458,8 +490,7 @@ def main():
         args.output = Path(temp_path)
     
     try:
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=args.hours)
-        step_started_at = time.monotonic()
+        cutoff = local_now() - timedelta(hours=args.hours)
         
         sources = load_sources(args.defaults, effective_config_dir)
         
@@ -504,25 +535,22 @@ def main():
         total_articles = sum(r.get("count", 0) for r in results)
 
         articles = [article for result in results for article in result.get("articles", []) if isinstance(article, dict)]
-        failed_items = [
-            normalize_failed_item(result.get("source_id"), result.get("error"), result.get("elapsed_s"))
-            for result in results
-            if result.get("status") != "ok" and result.get("error")
-        ]
         output = {
-            "generated": datetime.now(timezone.utc).isoformat(),
+            "generated": local_now().isoformat(),
             "source_type": "github",
             "articles": articles,
         }
         request_traces = [trace for result in results for trace in result.get("request_traces", []) if isinstance(trace, dict)]
+        effective_elapsed_s = sum(float(result.get("elapsed_s", 0) or 0) for result in results)
         meta = build_step_meta(
             step_key="github",
             status="ok" if ok_count == len(results) and total_articles > 0 else ("partial" if ok_count > 0 and total_articles > 0 else "error"),
-            elapsed_s=time.monotonic() - step_started_at,
+            elapsed_active_s=effective_elapsed_s,
+            elapsed_total_s=time.monotonic() - step_started_at,
             items=total_articles,
             calls_total=len(results),
             calls_ok=ok_count,
-            failed_items=failed_items,
+            failed_items=None,
             request_traces=request_traces,
         )
         write_result_with_meta(args.output, output, meta)

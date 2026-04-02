@@ -43,11 +43,27 @@ from email.utils import parsedate_to_datetime
 
 try:
     from config_loader import load_merged_runtime_config
-    from step_contract import build_request_trace, build_step_meta, configure_slow_request_thresholds, normalize_failed_item, write_result_with_meta
+    from step_contract import (
+        build_request_trace,
+        build_step_meta,
+        configure_slow_request_thresholds,
+        local_now,
+        normalize_failed_item,
+        to_local_datetime,
+        write_result_with_meta,
+    )
 except ImportError:
     sys.path.append(str(Path(__file__).parent))
     from config_loader import load_merged_runtime_config
-    from step_contract import build_request_trace, build_step_meta, configure_slow_request_thresholds, normalize_failed_item, write_result_with_meta
+    from step_contract import (
+        build_request_trace,
+        build_step_meta,
+        configure_slow_request_thresholds,
+        local_now,
+        normalize_failed_item,
+        to_local_datetime,
+        write_result_with_meta,
+    )
 
 
 def normalize_priority(priority: Any, default: int = 3) -> int:
@@ -193,6 +209,32 @@ def strip_tags(html: str) -> str:
     return unescape(re.sub(r"<[^>]+>", "", html)).strip()
 
 
+def truncate_summary(text: str, limit: int = 400) -> str:
+    clean_text = re.sub(r"\s+", " ", strip_tags(extract_cdata(text or ""))).strip()
+    if len(clean_text) <= limit:
+        return clean_text
+    return clean_text[: limit - 3].rstrip() + "..."
+
+
+def extract_feedparser_summary(entry: Any) -> str:
+    summary = entry.get("summary", "") or entry.get("description", "")
+    if not summary:
+        content = entry.get("content")
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("value"):
+                    summary = part.get("value", "")
+                    break
+    return truncate_summary(summary)
+
+
+def extract_xml_summary(item: ET.Element) -> str:
+    summary_el = _xml_first_child(item, "summary", "description", "content", "encoded")
+    if summary_el is None:
+        summary_el = _xml_find_descendant(item, "summary", "description", "content", "encoded")
+    return truncate_summary(_xml_element_text(summary_el))
+
+
 def _xml_local_name(tag: str) -> str:
     """Return the local element name without namespace."""
     if "}" in tag:
@@ -303,7 +345,7 @@ def parse_feed_feedparser(content: str, cutoff: datetime, feed_url: str) -> List
             for date_field in ['published_parsed', 'updated_parsed']:
                 if hasattr(entry, date_field) and getattr(entry, date_field):
                     try:
-                        pub_date = datetime(*getattr(entry, date_field)[:6], tzinfo=timezone.utc)
+                        pub_date = to_local_datetime(datetime(*getattr(entry, date_field)[:6], tzinfo=timezone.utc))
                         break
                     except (TypeError, ValueError):
                         continue
@@ -314,6 +356,7 @@ def parse_feed_feedparser(content: str, cutoff: datetime, feed_url: str) -> List
                     if hasattr(entry, date_field) and getattr(entry, date_field):
                         pub_date = parse_date_regex(getattr(entry, date_field))
                         if pub_date:
+                            pub_date = to_local_datetime(pub_date)
                             break
                             
             if title and link and pub_date and pub_date >= cutoff:
@@ -321,6 +364,7 @@ def parse_feed_feedparser(content: str, cutoff: datetime, feed_url: str) -> List
                     "title": title[:200],
                     "link": resolve_link(link, feed_url),
                     "date": pub_date.isoformat(),
+                    "summary": extract_feedparser_summary(entry),
                 })
                 
     except Exception as e:
@@ -378,7 +422,8 @@ def parse_feed_xml(content: str, cutoff: datetime, feed_url: str) -> List[Dict[s
             articles.append({
                 "title": title[:200],
                 "link": link,
-                "date": pub.isoformat(),
+                "date": to_local_datetime(pub).isoformat(),
+                "summary": extract_xml_summary(item),
             })
 
     return articles[:MAX_ARTICLES_PER_FEED]
@@ -448,6 +493,7 @@ def fetch_feed_with_retry(source: Dict[str, Any], cutoff: datetime, no_cache: bo
     topic = str(source.get("topic") or "")
     request_log: List[Dict[str, Any]] = []
     started_at = time.monotonic()
+    active_elapsed_s = 0.0
     
     global _rss_cache, _rss_cache_dirty
     
@@ -487,14 +533,22 @@ def fetch_feed_with_retry(source: Dict[str, Any], cutoff: datetime, no_cache: bo
             except URLError as e:
                 if hasattr(e, 'code') and e.code == 304:
                     logging.info(f"⏭ {name}: not modified (304)")
+                    attempt_elapsed = round(time.monotonic() - request_started_at, 3)
+                    total_elapsed = round(time.monotonic() - started_at, 3)
+                    active_elapsed_s += attempt_elapsed
                     request_log.append(
                         build_request_trace(
+                            source_id,
                             url,
-                            time.monotonic() - request_started_at,
+                            attempt_elapsed,
                             status="ok",
+                            source_type="rss",
                             method="GET",
                             attempt=attempt + 1,
+                            backend="urllib",
+                            adapter="rss/feed",
                             result="not_modified",
+                            elapsed_total_s=total_elapsed,
                         )
                     )
                     return {
@@ -506,7 +560,8 @@ def fetch_feed_with_retry(source: Dict[str, Any], cutoff: datetime, no_cache: bo
                         "topic": topic,
                         "status": "ok",
                         "attempts": attempt + 1,
-                        "elapsed_s": round(time.monotonic() - started_at, 3),
+                        "elapsed_s": round(active_elapsed_s, 3),
+                        "total_elapsed_s": total_elapsed,
                         "not_modified": True,
                         "items": 0,
                         "count": 0,
@@ -515,13 +570,21 @@ def fetch_feed_with_retry(source: Dict[str, Any], cutoff: datetime, no_cache: bo
                         "failed_items": [],
                     }
                 raise
+            attempt_elapsed = round(time.monotonic() - request_started_at, 3)
+            total_elapsed = round(time.monotonic() - started_at, 3)
+            active_elapsed_s += attempt_elapsed
             request_log.append(
                 build_request_trace(
+                    source_id,
                     url,
-                    time.monotonic() - request_started_at,
+                    attempt_elapsed,
                     status="ok",
+                    source_type="rss",
                     method="GET",
                     attempt=attempt + 1,
+                    backend="urllib",
+                    adapter="rss/feed",
+                    elapsed_total_s=total_elapsed,
                 )
             )
                 
@@ -531,6 +594,7 @@ def fetch_feed_with_retry(source: Dict[str, Any], cutoff: datetime, no_cache: bo
             validated_articles = []
             for article in articles:
                 article["topic"] = topic
+                article["source_name"] = name
                 if validate_article_domain(article.get("link", ""), source):
                     validated_articles.append(article)
                 else:
@@ -546,7 +610,8 @@ def fetch_feed_with_retry(source: Dict[str, Any], cutoff: datetime, no_cache: bo
                 "topic": topic,
                 "status": "ok",
                 "attempts": attempt + 1,
-                "elapsed_s": round(time.monotonic() - started_at, 3),
+                "elapsed_s": round(active_elapsed_s, 3),
+                "total_elapsed_s": total_elapsed,
                 "items": len(articles),
                 "count": len(articles),
                 "articles": articles,
@@ -556,22 +621,30 @@ def fetch_feed_with_retry(source: Dict[str, Any], cutoff: datetime, no_cache: bo
             
         except Exception as e:
             error_msg = str(e)[:100]
-            request_log.append(
-                build_request_trace(
-                    url,
-                    time.monotonic() - request_started_at,
-                    status="error",
-                    method="GET",
-                    attempt=attempt + 1,
-                    error=error_msg,
-                )
-            )
             logging.debug(f"Attempt {attempt + 1} failed for {name}: {error_msg}")
             
             if attempt < RETRY_COUNT and is_retryable_rss_error(e):
                 time.sleep(RETRY_DELAY * (2 ** attempt))  # Exponential backoff
                 continue
             else:
+                attempt_elapsed = round(time.monotonic() - request_started_at, 3)
+                total_elapsed = round(time.monotonic() - started_at, 3)
+                active_elapsed_s += attempt_elapsed
+                request_log.append(
+                    build_request_trace(
+                        source_id,
+                        url,
+                        attempt_elapsed,
+                        status="error",
+                        source_type="rss",
+                        method="GET",
+                        attempt=attempt + 1,
+                        backend="urllib",
+                        adapter="rss/feed",
+                        error=error_msg,
+                        elapsed_total_s=total_elapsed,
+                    )
+                )
                 return {
                     "source_id": source_id,
                     "source_type": "rss",
@@ -582,12 +655,13 @@ def fetch_feed_with_retry(source: Dict[str, Any], cutoff: datetime, no_cache: bo
                     "status": "error",
                     "attempts": attempt + 1,
                     "error": error_msg,
-                    "elapsed_s": round(time.monotonic() - started_at, 3),
+                    "elapsed_s": round(active_elapsed_s, 3),
+                    "total_elapsed_s": total_elapsed,
                     "items": 0,
                     "count": 0,
                     "articles": [],
                     "request_traces": request_log,
-                    "failed_items": [normalize_failed_item(source_id, error_msg, time.monotonic() - started_at)],
+                    "failed_items": [],
                 }
 
 
@@ -654,7 +728,7 @@ def main():
         args.output = Path(temp_path)
     
     try:
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=args.hours)
+        cutoff = local_now() - timedelta(hours=args.hours)
         step_started_at = time.monotonic()
         
         sources = load_sources(args.defaults, effective_config_dir)
@@ -696,14 +770,8 @@ def main():
         ok_count = sum(1 for r in results if r["status"] == "ok")
         total_articles = sum(r.get("count", 0) for r in results)
         articles = [article for result in results for article in result.get("articles", []) if isinstance(article, dict)]
-        failed_items = [
-            normalize_failed_item(result.get("source_id"), result.get("error"), result.get("elapsed_s"))
-            for result in results
-            if result.get("status") != "ok" and result.get("error")
-        ]
-
         output = {
-            "generated": datetime.now(timezone.utc).isoformat(),
+            "generated": local_now().isoformat(),
             "source_type": "rss",
             "articles": articles,
         }
@@ -711,11 +779,12 @@ def main():
         meta = build_step_meta(
             step_key="rss",
             status="ok" if ok_count == len(results) and total_articles > 0 else ("partial" if ok_count > 0 and total_articles > 0 else "error"),
-            elapsed_s=time.monotonic() - step_started_at,
+            elapsed_active_s=sum(float(result.get("elapsed_s", 0) or 0) for result in results),
+            elapsed_total_s=time.monotonic() - step_started_at,
             items=total_articles,
             calls_total=len(results),
             calls_ok=ok_count,
-            failed_items=failed_items,
+            failed_items=None,
             request_traces=request_traces,
         )
         write_result_with_meta(args.output, output, meta)

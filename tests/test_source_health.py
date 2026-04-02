@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 import unittest
+from datetime import timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -178,13 +179,13 @@ class TestSourceHealth(unittest.TestCase):
             "elapsed_s": 3.2,
             "items": 0,
             "call_stats": {"kind": "sources", "total_calls": 1, "ok_calls": 0, "failed_calls": 1},
-            "failed_items": [{"id": "simon-twitter", "error": "HTTP 429", "elapsed_s": 2.1}],
+            "failed_items": [{"source_id": "simon-twitter", "error": "HTTP 429", "elapsed_s": 2.1}],
             "details": {},
         }
 
         diagnostic = source_health.compute_step_state(meta)
 
-        self.assertEqual(diagnostic.failed_items[0]["id"], "simon-twitter")
+        self.assertEqual(diagnostic.failed_items[0]["source_id"], "simon-twitter")
         self.assertEqual(diagnostic.failed_items[0]["error"], "HTTP 429")
         self.assertEqual(diagnostic.failed_items[0]["elapsed_s"], 2.1)
 
@@ -199,7 +200,7 @@ class TestSourceHealth(unittest.TestCase):
                 elapsed_s=10.0,
                 items=0,
                 call_stats={"kind": "sources", "total_calls": 1, "ok_calls": 0, "failed_calls": 1},
-                failed_items=[{"id": "simon-twitter", "error": "HTTP 429"}],
+                failed_items=[{"source_id": "simon-twitter", "error": "HTTP 429"}],
                 details={},
                 observed_ts=now - 100,
             ),
@@ -222,7 +223,7 @@ class TestSourceHealth(unittest.TestCase):
         self.assertEqual(rows[0].latest_issue_summary, "HTTP 429")
         self.assertEqual(rows[0].check_details[0]["items"], 10)
         self.assertEqual(rows[0].check_details[0]["failed_items"], [])
-        self.assertEqual(rows[0].check_details[1]["failed_items"], [{"id": "simon-twitter", "error": "HTTP 429"}])
+        self.assertEqual(rows[0].check_details[1]["failed_items"], [{"source_id": "simon-twitter", "target": "", "status": "error", "error": "HTTP 429", "method": "", "attempt": 1, "backend": "", "adapter": ""}])
 
     def test_build_history_rows_preserves_failed_item_elapsed(self):
         now = 1_800_000_000
@@ -235,7 +236,7 @@ class TestSourceHealth(unittest.TestCase):
                 elapsed_s=20.0,
                 items=0,
                 call_stats={"kind": "queries", "total_calls": 1, "ok_calls": 0, "failed_calls": 1},
-                failed_items=[{"id": "ai-frontier", "error": "HTTP 429", "elapsed_s": 7.8}],
+                failed_items=[{"source_id": "ai-frontier", "error": "HTTP 429", "elapsed_s": 7.8}],
                 details={},
                 observed_ts=now - 100,
             )
@@ -243,7 +244,7 @@ class TestSourceHealth(unittest.TestCase):
 
         rows = source_health.build_history_rows(diagnostics, now)
 
-        self.assertEqual(rows[0].check_details[0]["failed_items"], [{"id": "ai-frontier", "error": "HTTP 429", "elapsed_s": 7.8}])
+        self.assertEqual(rows[0].check_details[0]["failed_items"], [{"source_id": "ai-frontier", "target": "", "status": "error", "error": "HTTP 429", "method": "", "attempt": 1, "backend": "", "adapter": "", "elapsed_s": 7.8}])
 
     def test_main_reads_meta_files(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -297,8 +298,8 @@ class TestSourceHealth(unittest.TestCase):
     def test_discover_archive_meta_files_reads_recent_meta_dirs(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             archive_root = Path(tmpdir)
-            recent_dir = archive_root / (source_health.datetime.now(source_health.timezone.utc) - source_health.timedelta(days=1)).strftime("%Y-%m-%d") / "meta"
-            old_dir = archive_root / (source_health.datetime.now(source_health.timezone.utc) - source_health.timedelta(days=30)).strftime("%Y-%m-%d") / "meta"
+            recent_dir = archive_root / (source_health.local_now() - timedelta(days=1)).strftime("%Y-%m-%d") / "meta"
+            old_dir = archive_root / (source_health.local_now() - timedelta(days=30)).strftime("%Y-%m-%d") / "meta"
             recent_dir.mkdir(parents=True)
             old_dir.mkdir(parents=True)
             (recent_dir / "pipeline.meta.json").write_text("{}", encoding="utf-8")
@@ -311,6 +312,11 @@ class TestSourceHealth(unittest.TestCase):
             self.assertIn("pipeline.meta.json", names)
             self.assertIn("rss.meta2.json", names)
             self.assertEqual(len(files), 2)
+
+    def test_build_direct_run_label_uses_local_timezone_date(self):
+        local_ts = source_health.local_now().timestamp()
+        expected = source_health.local_now().strftime("%Y-%m-%d-current")
+        self.assertEqual(source_health.build_direct_run_label(Path("."), local_ts), expected)
 
     def test_discover_all_meta_files_combines_direct_and_archive_meta(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -363,7 +369,7 @@ class TestSourceHealth(unittest.TestCase):
                         "items": 1,
                         "call_stats": {"kind": "steps", "total_calls": 3, "ok_calls": 2, "failed_calls": 1},
                         "steps": [{"name": "Twitter", "status": "error", "stderr_tail": ["HTTP 429"]}],
-                        "failed_items": [{"id": "twitter", "error": "HTTP 429", "elapsed_s": 3.4}],
+                        "failed_items": [{"source_id": "twitter", "error": "HTTP 429", "elapsed_s": 3.4}],
                         "merge": {"status": "ok", "count": 1, "stderr_tail": []},
                         "hotspots_status": "ok",
                     }
@@ -431,7 +437,7 @@ class TestSourceHealth(unittest.TestCase):
                 call_stats={"kind": "queries", "total_calls": 11, "ok_calls": 10, "failed_calls": 1},
                 failed_items=[
                     {
-                        "id": "ai-frontier",
+                        "source_id": "ai-frontier",
                         "error": "[error] site google/news: Error: Timed out loading Google news results\nReport: very noisy tail",
                     }
                 ],
@@ -458,7 +464,7 @@ class TestSourceHealth(unittest.TestCase):
                 elapsed_s=377.0,
                 items=310,
                 call_stats={"kind": "queries", "total_calls": 9, "ok_calls": 8, "failed_calls": 1},
-                failed_items=[{"id": "r/foo", "error": "HTTP 429", "elapsed_s": 45.6}],
+                failed_items=[{"source_id": "r/foo", "error": "HTTP 429", "elapsed_s": 45.6}],
                 details={},
                 observed_ts=0,
             )

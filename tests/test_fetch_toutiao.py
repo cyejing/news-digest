@@ -26,6 +26,7 @@ class TestFetchToutiao(unittest.TestCase):
 
         self.assertIsNotNone(article)
         self.assertEqual(article["topic"], "social")
+        self.assertEqual(article["source_name"], "Toutiao Hot")
         self.assertEqual(article["hot_score"], 6320000)
         self.assertIn("www.toutiao.com/search/", article["link"])
 

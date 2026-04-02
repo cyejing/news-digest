@@ -82,8 +82,8 @@
     "report_limit": 20,
     "error_text_limit": 180,
     "slow_request_thresholds_s": [
-      10.0,
-      15.0
+      3.0,
+      5.0
     ]
   },
   "cache": {

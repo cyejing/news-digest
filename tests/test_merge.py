@@ -174,8 +174,10 @@ class TestMergeSources(unittest.TestCase):
             self.assertIn("local_extra_score", merged_article["score_components"])
             self.assertNotIn("scoring_debug", merged_article)
             self.assertNotIn("similarity_debug", merged_article)
+            self.assertEqual(merged_article["source_name"], "RSS One")
             self.assertNotIn("source_names", merged_article)
             self.assertNotIn("source_name_count", merged_article)
+            self.assertNotIn("display_name", merged_article)
 
 
 if __name__ == "__main__":

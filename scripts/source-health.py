@@ -29,15 +29,17 @@ import statistics
 import sys
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 try:
     from config_loader import load_merged_runtime_config
+    from step_contract import from_timestamp_local, local_now, local_tzinfo
 except ImportError:
     sys.path.append(str(Path(__file__).parent))
     from config_loader import load_merged_runtime_config
+    from step_contract import from_timestamp_local, local_now, local_tzinfo
 
 HISTORY_DAYS = 7
 DEGRADED_THRESHOLD = 0.5
@@ -140,7 +142,7 @@ def discover_meta_files(input_dir: Path) -> List[Path]:
 def discover_archive_meta_files(archive_dir: Path, days: int = HISTORY_DAYS) -> List[Path]:
     if not archive_dir.exists():
         return []
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).date()
+    cutoff = (local_now() - timedelta(days=days)).date()
     paths: List[Path] = []
     for date_dir in sorted(archive_dir.iterdir()):
         if not date_dir.is_dir():
@@ -174,7 +176,7 @@ def discover_all_meta_files(input_dir: Path, days: int = HISTORY_DAYS) -> List[P
 def parse_archive_observed_ts(path: Path) -> float:
     for parent in path.parents:
         try:
-            date_value = datetime.strptime(parent.name, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            date_value = datetime.strptime(parent.name, "%Y-%m-%d").replace(tzinfo=local_tzinfo())
             return date_value.timestamp()
         except ValueError:
             continue
@@ -202,7 +204,7 @@ def parse_archive_run_label(path: Path) -> Optional[str]:
 
 
 def build_direct_run_label(input_dir: Path, now_ts: float) -> str:
-    date_label = datetime.fromtimestamp(now_ts, tz=timezone.utc).strftime("%Y-%m-%d")
+    date_label = from_timestamp_local(now_ts).strftime("%Y-%m-%d")
     return f"{date_label}-current"
 
 
@@ -210,8 +212,14 @@ def build_failed_items(items: Any) -> List[Dict[str, Any]]:
     return [
         dict(
             {
-                "id": str(item.get("id", "item")).strip() or "item",
+                "source_id": str(item.get("source_id", "item")).strip() or "item",
+                "target": str(item.get("target", "")).strip(),
+                "status": str(item.get("status", "error")).strip() or "error",
                 "error": trim_error_text(item.get("error")),
+                "method": str(item.get("method", "")).strip(),
+                "attempt": int(item.get("attempt", 1) or 1),
+                "backend": str(item.get("backend", "")).strip(),
+                "adapter": str(item.get("adapter", "")).strip(),
             },
             **({"elapsed_s": float(item.get("elapsed_s", 0) or 0)} if item.get("elapsed_s") is not None else {}),
         )
@@ -230,12 +238,41 @@ def format_elapsed_suffix(elapsed_s: Any) -> str:
 
 def compute_pipeline_state(meta: Dict[str, Any], observed_ts: Optional[float] = None) -> DiagnosticRecord:
     observed_ts = observed_ts or time.time()
-    steps = [step for step in meta.get("steps", []) if isinstance(step, dict)]
+    if "step_summaries" in meta and isinstance(meta.get("step_summaries"), dict):
+        steps = [
+            {"name": summary.get("name", step_key), "status": summary.get("status", "error")}
+            for step_key, summary in meta.get("step_summaries", {}).items()
+            if isinstance(summary, dict)
+        ]
+        overall_status = meta.get("status", "error")
+        hotspots_status = meta.get("step_summaries", {}).get("merge-hotspots", {}).get("status", "error") if isinstance(meta.get("step_summaries", {}).get("merge-hotspots"), dict) else "error"
+        merge_status = meta.get("step_summaries", {}).get("merge-sources", {}).get("status", "error") if isinstance(meta.get("step_summaries", {}).get("merge-sources"), dict) else "error"
+        items = sum(
+            int(summary.get("items", 0) or 0)
+            for summary in meta.get("step_summaries", {}).values()
+            if isinstance(summary, dict) and summary.get("step_key") in {"merge-hotspots", "merge-sources"}
+        )
+        call_stats = meta.get("call_stats", {}) if isinstance(meta.get("call_stats"), dict) else {}
+        failed_items = build_failed_items([
+            item
+            for summary in meta.get("step_summaries", {}).values()
+            if isinstance(summary, dict)
+            for item in (summary.get("failed_items", []) if isinstance(summary.get("failed_items"), list) else [])
+        ])
+        elapsed_s = float(meta.get("timing_s", {}).get("total", meta.get("total_elapsed_s", meta.get("elapsed_s", 0))) or 0)
+        fetch_elapsed_s = float(meta.get("fetch_timing_s", {}).get("total", meta.get("fetch_total_elapsed_s", meta.get("fetch_elapsed_s", 0))) or 0)
+    else:
+        steps = [step for step in meta.get("steps", []) if isinstance(step, dict)]
+        failed_items = build_failed_items(meta.get("failed_items", []))
+        call_stats = meta.get("call_stats", {}) if isinstance(meta.get("call_stats"), dict) else {}
+        items = int(meta.get("items", 0) or 0)
+        merge_status = meta.get("merge", {}).get("status", "error") if isinstance(meta.get("merge"), dict) else "error"
+        hotspots_status = meta.get("hotspots_status", "error")
+        overall_status = meta.get("overall_status", "error")
+        elapsed_s = float(meta.get("total_elapsed_s", meta.get("elapsed_s", 0)) or 0)
+        fetch_elapsed_s = float(meta.get("fetch_total_elapsed_s", meta.get("fetch_elapsed_s", 0)) or 0)
     failed_steps = [step.get("name", "unknown") for step in steps if step.get("status") in {"error", "timeout"}]
     skipped_steps = [step.get("name", "unknown") for step in steps if step.get("status") == "skipped"]
-    merge_status = meta.get("merge", {}).get("status", "error") if isinstance(meta.get("merge"), dict) else "error"
-    hotspots_status = meta.get("hotspots_status", "error")
-    overall_status = meta.get("overall_status", "error")
 
     if overall_status in {"error", "timeout"} or merge_status != "ok" or hotspots_status != "ok":
         state = "error"
@@ -245,17 +282,12 @@ def compute_pipeline_state(meta: Dict[str, Any], observed_ts: Optional[float] = 
         state = "warn"
     else:
         state = "ok"
-
-    failed_items = build_failed_items(meta.get("failed_items", []))
-    call_stats = meta.get("call_stats", {}) if isinstance(meta.get("call_stats"), dict) else {}
-    items = int(meta.get("items", 0) or 0)
-
     return DiagnosticRecord(
         step_key="pipeline",
         name="Pipeline",
         status=overall_status,
         state=state,
-        elapsed_s=float(meta.get("total_elapsed_s", 0) or 0),
+        elapsed_s=elapsed_s,
         items=items,
         call_stats={
             "kind": str(call_stats.get("kind", "steps")),
@@ -268,7 +300,7 @@ def compute_pipeline_state(meta: Dict[str, Any], observed_ts: Optional[float] = 
         failed_items=failed_items,
         details={
             "pipeline": {
-                "fetch_elapsed_s": meta.get("fetch_elapsed_s", 0),
+                "fetch_elapsed_s": fetch_elapsed_s,
                 "failed_steps": failed_steps,
                 "skipped_steps": skipped_steps,
                 "hotspots_status": hotspots_status,
@@ -319,7 +351,7 @@ def compute_step_state(meta: Dict[str, Any], observed_ts: Optional[float] = None
         name=meta.get("name", meta.get("step_key", "unknown")),
         status=status,
         state=state,
-        elapsed_s=float(meta.get("elapsed_s", 0) or 0),
+        elapsed_s=float(meta.get("timing_s", {}).get("total", meta.get("total_elapsed_s", meta.get("elapsed_s", 0))) or 0),
         items=items,
         call_stats={
             "kind": str(call_stats.get("kind", meta.get("step_key", "step"))),
@@ -357,8 +389,14 @@ def build_history_rows(diagnostics: List[DiagnosticRecord], now: float) -> List[
                 "failed_items": [
                     dict(
                         {
-                            "id": str(item.get("id", "item")).strip() or "item",
+                            "source_id": str(item.get("source_id", "item")).strip() or "item",
+                            "target": str(item.get("target", "")).strip(),
+                            "status": str(item.get("status", "error")).strip() or "error",
                             "error": trim_error_text(item.get("error")),
+                            "method": str(item.get("method", "")).strip(),
+                            "attempt": int(item.get("attempt", 1) or 1),
+                            "backend": str(item.get("backend", "")).strip(),
+                            "adapter": str(item.get("adapter", "")).strip(),
                         },
                         **({"elapsed_s": float(item.get("elapsed_s", 0) or 0)} if item.get("elapsed_s") is not None else {}),
                     )
@@ -461,7 +499,7 @@ def render_run_details(diagnostics: List[DiagnosticRecord]) -> List[str]:
             for failed_item in item.failed_items:
                 failed_elapsed = failed_item.get("elapsed_s", item.elapsed_s)
                 lines.append(
-                    f"   - {failed_item.get('id', 'item')}: {trim_error_text(failed_item.get('error'))}"
+                    f"   - {failed_item.get('source_id', 'item')}: {trim_error_text(failed_item.get('error'))}"
                     f"{format_elapsed_suffix(failed_elapsed)}"
                 )
     return lines

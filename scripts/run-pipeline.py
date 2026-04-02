@@ -36,21 +36,24 @@ import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 try:
     from config_loader import load_merged_runtime_config
     from step_registry import ALL_SOURCE_STEPS, iter_fetch_steps
+    from step_contract import local_now, local_today_iso, normalize_timing
 except ImportError:
     sys.path.append(str(Path(__file__).parent))
     from config_loader import load_merged_runtime_config
     from step_registry import ALL_SOURCE_STEPS, iter_fetch_steps
+    from step_contract import local_now, local_today_iso, normalize_timing
 
 SCRIPTS_DIR = Path(__file__).parent
 MERGE_STEP_KEY = "merge-sources"
 HOTSPOTS_STEP_KEY = "merge-hotspots"
+PROCESS_LOG_TAIL_LINES = 100
 
 
 @dataclass(frozen=True)
@@ -72,7 +75,34 @@ class ProcessResult:
     timeout_s: int
     stdout_tail: List[str] = field(default_factory=list)
     stderr_tail: List[str] = field(default_factory=list)
+    stdout_lines: int = 0
+    stderr_lines: int = 0
+    command: List[str] = field(default_factory=list)
     returncode: Optional[int] = None
+
+
+class PipelineLogCapture(logging.Handler):
+    def __init__(self, limit: int = PROCESS_LOG_TAIL_LINES):
+        super().__init__()
+        self.limit = max(1, limit)
+        self._lines: List[str] = []
+        self.total_lines = 0
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            line = self.format(record)
+        except Exception:
+            line = record.getMessage()
+        self.total_lines += 1
+        self._lines.append(line)
+        if len(self._lines) > self.limit:
+            self._lines = self._lines[-self.limit:]
+
+    def snapshot(self) -> Dict[str, Any]:
+        return {
+            "line_count": self.total_lines,
+            "tail": list(self._lines),
+        }
 
 
 def setup_logging(verbose: bool) -> logging.Logger:
@@ -126,12 +156,54 @@ def load_json(path: Optional[Path]) -> Optional[Dict[str, Any]]:
         return None
 
 
+def summarize_stream(text: Optional[str], stream_name: str) -> tuple[List[str], int]:
+    lines = [line.rstrip() for line in (text or "").splitlines() if line.strip()]
+    return lines[-PROCESS_LOG_TAIL_LINES:], len(lines)
+
+
+def build_process_logs(result: ProcessResult) -> Dict[str, Any]:
+    tail: List[str] = []
+    tail.extend(f"[stdout] {line}" for line in result.stdout_tail)
+    tail.extend(f"[stderr] {line}" for line in result.stderr_tail)
+    if len(tail) > PROCESS_LOG_TAIL_LINES:
+        tail = tail[-PROCESS_LOG_TAIL_LINES:]
+    summary = [
+        f"status={result.status}",
+        f"elapsed={format_elapsed(result.elapsed_s)}",
+        f"timeout={result.timeout_s}s",
+    ]
+    if result.returncode is not None:
+        summary.append(f"returncode={result.returncode}")
+    if result.command:
+        summary.append(f"command={' '.join(result.command)}")
+    return {
+        "summary": " | ".join(summary),
+        "line_count": int(result.stdout_lines) + int(result.stderr_lines),
+        "stdout_line_count": int(result.stdout_lines),
+        "stderr_line_count": int(result.stderr_lines),
+        "tail": tail,
+    }
+
+
+def normalize_meta_timing(meta_payload: Dict[str, Any], default_active: float, default_total: float) -> Dict[str, float]:
+    timing = meta_payload.get("timing_s")
+    if isinstance(timing, dict):
+        return normalize_timing(
+            timing.get("active", meta_payload.get("elapsed_s", default_active)),
+            timing.get("total", meta_payload.get("total_elapsed_s", default_total)),
+        )
+    return normalize_timing(meta_payload.get("elapsed_s", default_active), meta_payload.get("total_elapsed_s", default_total))
+
+
 def parse_output_markers(lines: Sequence[str]) -> Dict[str, str]:
     markers: Dict[str, str] = {}
     for line in lines:
-        if "=" not in line:
+        normalized_line = line
+        if normalized_line.startswith("[stdout] ") or normalized_line.startswith("[stderr] "):
+            normalized_line = normalized_line.split("] ", 1)[1]
+        if "=" not in normalized_line:
             continue
-        key, value = line.split("=", 1)
+        key, value = normalized_line.split("=", 1)
         key = key.strip()
         value = value.strip()
         if key and value:
@@ -149,7 +221,7 @@ def resolve_debug_dir(debug_dir: Optional[Path]) -> Path:
 def cleanup_archive_root(archive_root: Path, retention_days: int) -> int:
     if not archive_root.exists():
         return 0
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).date()
+    cutoff = (local_now() - timedelta(days=retention_days)).date()
     removed = 0
     for child in archive_root.iterdir():
         if not child.is_dir():
@@ -167,7 +239,7 @@ def cleanup_archive_root(archive_root: Path, retention_days: int) -> int:
 def archive_step_meta(step_meta_path: Path, archive_root: Path) -> Optional[Path]:
     if not step_meta_path.exists():
         return None
-    date_dir = archive_root / datetime.now().astimezone().date().isoformat() / "meta"
+    date_dir = archive_root / local_today_iso() / "meta"
     date_dir.mkdir(parents=True, exist_ok=True)
     destination = date_dir / step_meta_path.name
     shutil.copy2(step_meta_path, destination)
@@ -284,8 +356,8 @@ def run_step_process(spec: StepSpec) -> ProcessResult:
             env=env,
         )
         elapsed_s = round(time.monotonic() - started, 3)
-        stdout_tail = [line for line in completed.stdout.splitlines() if line.strip()][-20:]
-        stderr_tail = [line for line in completed.stderr.splitlines() if line.strip()][-20:]
+        stdout_tail, stdout_lines = summarize_stream(completed.stdout, "stdout")
+        stderr_tail, stderr_lines = summarize_stream(completed.stderr, "stderr")
         status = "ok" if completed.returncode == 0 else "error"
         return ProcessResult(
             step_key=spec.step_key,
@@ -295,12 +367,15 @@ def run_step_process(spec: StepSpec) -> ProcessResult:
             timeout_s=spec.timeout_s,
             stdout_tail=stdout_tail,
             stderr_tail=stderr_tail,
+            stdout_lines=stdout_lines,
+            stderr_lines=stderr_lines,
+            command=command,
             returncode=completed.returncode,
         )
     except subprocess.TimeoutExpired as exc:
         elapsed_s = round(time.monotonic() - started, 3)
-        stdout_tail = [line for line in (exc.stdout or "").splitlines() if line.strip()][-20:]
-        stderr_tail = [line for line in (exc.stderr or "").splitlines() if line.strip()][-20:]
+        stdout_tail, stdout_lines = summarize_stream(exc.stdout, "stdout")
+        stderr_tail, stderr_lines = summarize_stream(exc.stderr, "stderr")
         stderr_tail.append(f"Killed after {spec.timeout_s}s")
         return ProcessResult(
             step_key=spec.step_key,
@@ -310,6 +385,9 @@ def run_step_process(spec: StepSpec) -> ProcessResult:
             timeout_s=spec.timeout_s,
             stdout_tail=stdout_tail,
             stderr_tail=stderr_tail,
+            stdout_lines=stdout_lines,
+            stderr_lines=stderr_lines + 1,
+            command=command,
             returncode=None,
         )
     except Exception as exc:
@@ -321,6 +399,8 @@ def run_step_process(spec: StepSpec) -> ProcessResult:
             elapsed_s=elapsed_s,
             timeout_s=spec.timeout_s,
             stderr_tail=[str(exc)],
+            stderr_lines=1,
+            command=command,
             returncode=None,
         )
 
@@ -345,22 +425,29 @@ def build_simple_meta(
         output_path: Optional[str] = None,
         extra: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    timing = normalize_timing(result.elapsed_s, result.elapsed_s)
     payload: Dict[str, Any] = {
         "step_key": step_key,
         "status": result.status,
-        "elapsed_s": result.elapsed_s,
+        "elapsed_s": timing["active"],
+        "total_elapsed_s": timing["total"],
+        "timing_s": timing,
         "items": items,
         "calls_total": calls_total,
         "calls_ok": calls_ok,
+        "failed_calls": max(0, calls_total - calls_ok),
+        "call_stats": {
+            "kind": step_key,
+            "total_calls": calls_total,
+            "ok_calls": calls_ok,
+            "failed_calls": max(0, calls_total - calls_ok),
+        },
         "failed_items": failed_items or [],
         "timeout_s": result.timeout_s,
+        "logs": build_process_logs(result),
     }
     if output_path:
         payload["output_path"] = output_path
-    if result.stderr_tail:
-        payload["stderr_tail"] = result.stderr_tail
-    if result.stdout_tail:
-        payload["stdout_tail"] = result.stdout_tail
     if extra:
         payload.update(extra)
     return payload
@@ -375,10 +462,20 @@ def summarize_fetch_step(spec: StepSpec, result: ProcessResult) -> Dict[str, Any
     meta_payload = load_json(fetch_step_meta_path(spec.output_path)) if spec.output_path else None
     if meta_payload:
         meta_payload.setdefault("step_key", spec.step_key)
-        meta_payload.setdefault("elapsed_s", result.elapsed_s)
+        timing = normalize_meta_timing(meta_payload, result.elapsed_s, result.elapsed_s)
+        meta_payload["elapsed_s"] = timing["active"]
+        meta_payload["total_elapsed_s"] = timing["total"]
+        meta_payload["timing_s"] = timing
         meta_payload.setdefault("timeout_s", result.timeout_s)
         meta_payload.setdefault("status", result.status)
         meta_payload.setdefault("output_path", str(spec.output_path) if spec.output_path else "")
+        meta_payload.setdefault("call_stats", {
+            "kind": spec.step_key,
+            "total_calls": int(meta_payload.get("calls_total", 0) or 0),
+            "ok_calls": int(meta_payload.get("calls_ok", 0) or 0),
+            "failed_calls": int(meta_payload.get("failed_calls", 0) or 0),
+        })
+        meta_payload["logs"] = build_process_logs(result)
         return meta_payload
 
     items = len(output_payload.get("articles", [])) if output_payload else 0
@@ -419,6 +516,8 @@ def run_fetch_phase(
             summary = summarize_fetch_step(spec, result)
             step_summaries[spec.step_key] = summary
             if spec.output_path:
+                write_json(fetch_step_meta_path(spec.output_path), summary)
+            if spec.output_path:
                 outputs[spec.step_key] = str(spec.output_path)
             logger.info(
                 "  %s %s: %d items (%s)",
@@ -456,6 +555,8 @@ def build_pipeline_meta(
         archive_root: Path,
         cleaned_archives: int,
         started_at: float,
+        fetch_elapsed_s: float = 0.0,
+        pipeline_logs: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     statuses = [summary.get("status", "error") for summary in step_summaries.values()]
     if outputs.get("hotspots_output"):
@@ -465,17 +566,78 @@ def build_pipeline_meta(
     else:
         overall_status = "error"
 
+    source_type_overview: Dict[str, Dict[str, Any]] = {}
+    fetch_active_s = 0.0
+    for step in ALL_SOURCE_STEPS:
+        summary = step_summaries.get(step.step_key)
+        if not isinstance(summary, dict):
+            continue
+        step_timing = normalize_meta_timing(summary, float(summary.get("elapsed_s", 0) or 0), float(summary.get("total_elapsed_s", summary.get("elapsed_s", 0)) or 0))
+        fetch_active_s += step_timing["active"]
+        failed_items = summary.get("failed_items", [])
+        slow_requests = summary.get("slow_requests", {})
+        source_type_overview[step.step_key] = {
+            "status": summary.get("status", "error"),
+            "fully_successful": summary.get("status") == "ok",
+            "items": int(summary.get("items", 0) or 0),
+            "elapsed_s": step_timing["active"],
+            "total_elapsed_s": step_timing["total"],
+            "timing_s": step_timing,
+            "calls_total": int(summary.get("calls_total", 0) or 0),
+            "calls_ok": int(summary.get("calls_ok", 0) or 0),
+            "failed_calls": int(summary.get("failed_calls", 0) or 0),
+            "failed_items_count": len(failed_items) if isinstance(failed_items, list) else 0,
+            "slow_requests_count": int(slow_requests.get("total_count", 0) or 0) if isinstance(slow_requests, dict) else 0,
+        }
+
+    pipeline_timing = normalize_timing(fetch_active_s, time.monotonic() - started_at)
+    fetch_timing = normalize_timing(fetch_active_s, fetch_elapsed_s)
+    steps = [
+        {
+            "step_key": step_key,
+            "name": summary.get("name", step_key),
+            "status": summary.get("status", "error"),
+            "timing_s": normalize_meta_timing(summary, float(summary.get("elapsed_s", 0) or 0), float(summary.get("total_elapsed_s", summary.get("elapsed_s", 0)) or 0)),
+            "items": int(summary.get("items", 0) or 0),
+            "logs": summary.get("logs", {}),
+        }
+        for step_key, summary in step_summaries.items()
+        if isinstance(summary, dict)
+    ]
+    total_items = 0
+    if isinstance(step_summaries.get(HOTSPOTS_STEP_KEY), dict):
+        total_items = int(step_summaries[HOTSPOTS_STEP_KEY].get("items", 0) or 0)
+    elif isinstance(step_summaries.get(MERGE_STEP_KEY), dict):
+        total_items = int(step_summaries[MERGE_STEP_KEY].get("items", 0) or 0)
     return {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "pipeline_version": "3.0.0",
+        "generated_at": local_now().isoformat(),
         "status": overall_status,
-        "elapsed_s": round(time.monotonic() - started_at, 3),
+        "overall_status": overall_status,
+        "elapsed_s": pipeline_timing["active"],
+        "total_elapsed_s": pipeline_timing["total"],
+        "timing_s": pipeline_timing,
+        "fetch_active_elapsed_s": fetch_timing["active"],
+        "fetch_elapsed_s": fetch_timing["total"],
+        "fetch_total_elapsed_s": fetch_timing["total"],
+        "fetch_timing_s": fetch_timing,
+        "items": total_items,
+        "call_stats": {
+            "kind": "steps",
+            "total_calls": len(step_summaries),
+            "ok_calls": sum(1 for summary in step_summaries.values() if isinstance(summary, dict) and summary.get("status") == "ok"),
+            "failed_calls": sum(1 for summary in step_summaries.values() if isinstance(summary, dict) and summary.get("status") in {"error", "timeout"}),
+        },
         "cooldown_s": {step.step_key: runtime.get("fetch", {}).get(step.step_key, {}).get("cooldown_s", 0) for step in ALL_SOURCE_STEPS},
+        "source_type_overview": source_type_overview,
         "step_summaries": step_summaries,
+        "steps": steps,
         "hotspots_output": outputs.get("hotspots_output"),
         "markdown_output": outputs.get("markdown_output"),
         "merged_output": outputs.get("merged_output"),
         "archive_root": str(archive_root),
         "cleaned_archives": cleaned_archives,
+        "logs": pipeline_logs or {"line_count": 0, "tail": []},
     }
 
 
@@ -497,6 +659,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     logger = setup_logging(args.verbose)
+    pipeline_log_capture = PipelineLogCapture()
+    pipeline_log_capture.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", "%H:%M:%S"))
+    logger.addHandler(pipeline_log_capture)
     debug_dir = resolve_debug_dir(args.debug)
     config_dir = args.config if args.config.exists() else None
     runtime = load_runtime(args.defaults, config_dir)
@@ -574,7 +739,16 @@ def main() -> int:
         format_elapsed(hotspots_summary.get("elapsed_s", hotspots_result.elapsed_s)),
     )
 
-    pipeline_meta = build_pipeline_meta(runtime, step_summaries, outputs, archive_root, cleaned_archives, started_at)
+    pipeline_meta = build_pipeline_meta(
+        runtime,
+        step_summaries,
+        outputs,
+        archive_root,
+        cleaned_archives,
+        started_at,
+        fetch_elapsed_s,
+        pipeline_logs=pipeline_log_capture.snapshot(),
+    )
     pipeline_meta_path = debug_dir / "pipeline.meta.json"
     write_json(pipeline_meta_path, pipeline_meta)
 
@@ -589,7 +763,8 @@ def main() -> int:
         pipeline_meta["archived_pipeline_meta"] = str(archived_pipeline_meta)
     if archived_step_meta_paths:
         pipeline_meta["archived_step_meta_paths"] = archived_step_meta_paths
-        write_json(pipeline_meta_path, pipeline_meta)
+    pipeline_meta["logs"] = pipeline_log_capture.snapshot()
+    write_json(pipeline_meta_path, pipeline_meta)
 
     if outputs.get("hotspots_output") or outputs.get("markdown_output"):
         logger.info("🗂️ Archived files:")

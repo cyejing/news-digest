@@ -87,10 +87,34 @@ uv run <SKILL_DIR>/scripts/run-pipeline.py \
 
 ### 必须遵守
 
-1. **完整翻译**：将归档 Markdown 全文翻译为 `<LANGUAGE>`
-2. **不删减**：每个 topic 和 item 都必须保留
+1. **顶部 Summary 总结**：将归档 Markdown 顶部的 `summary` 字段（`mode:xx | total_articles:xx | ...`）用大模型总结为自然语言描述，概括本次抓取的关键信息（如数据来源分布、总量、时间等）
+2. **标题与摘要翻译**：将每个 item 的 `<title> - <summary>` 部分翻译为 `<LANGUAGE>`
 3. **保持结构**：Markdown 结构、标题层级、链接格式不变
-4. **保留来源**：每条 item 的"来源：..."和"指标：..."必须保留
+4. **保留其他字段**：每条 item 的 `⭐分数`、`| source_name |`、`| metrics |` 等部分保留原样，不做翻译
+5. **完整保留**：每个 topic 和 item 都必须保留，不删减
+
+### 输出格式示例
+
+原始归档 Markdown：
+```
+---
+summary: mode:daily | total_articles:15 | rss:8 | twitter:4 | github:3 | generated_at:2026-04-02T10:00:00+00:00
+---
+# 2026-04-02 daily 全球科技与 AI 热点
+## AI Frontier
+1. ⭐9.4 | OpenAI releases GPT-5 with breakthrough reasoning - The new model shows significant improvements in multi-step reasoning tasks | OpenAI Blog | likes=120
+2. ⭐8.7 | Google announces Gemini 2.0 - Enhanced multimodal capabilities and faster inference | Google AI | retweets=45
+```
+
+翻译后输出（假设用户语言为中文）：
+``---
+本次热点汇总：今日共抓取 15 篇文章，主要来源包括 RSS（8 篇）、Twitter（4 篇）和 GitHub（3 篇），生成时间 2026-04-02 10:00。
+---
+# 2026-04-02 daily 全球科技与 AI 热点
+## AI Frontier
+1. ⭐9.4 | OpenAI 发布具备突破性推理能力的 GPT-5 - 新模型在多步推理任务中表现出显著提升 | OpenAI Blog | likes=120
+2. ⭐8.7 | Google 发布 Gemini 2.0 - 增强的多模态能力和更快的推理速度 | Google AI | retweets=45
+```
 
 ### 必须追加
 

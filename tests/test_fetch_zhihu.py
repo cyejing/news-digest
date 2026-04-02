@@ -28,6 +28,7 @@ class TestFetchZhihu(unittest.TestCase):
 
         self.assertIsNotNone(article)
         self.assertEqual(article["topic"], "social")
+        self.assertEqual(article["source_name"], "Zhihu Hot")
         self.assertEqual(article["hot_score"], 12640000)
 
     def test_transform_hot_item_builds_question_url_from_id(self):

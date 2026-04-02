@@ -29,22 +29,45 @@ import subprocess
 import sys
 import tempfile
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 try:
     from config_loader import load_merged_runtime_config, load_merged_topics
-    from step_contract import build_request_trace, build_step_meta, configure_slow_request_thresholds, normalize_failed_item, write_result_with_meta
+    from step_contract import (
+        build_request_trace,
+        build_step_meta,
+        configure_slow_request_thresholds,
+        from_timestamp_local,
+        local_now,
+        normalize_failed_item,
+        write_result_with_meta,
+    )
 except ImportError:
     sys.path.append(str(Path(__file__).parent))
     from config_loader import load_merged_runtime_config, load_merged_topics
-    from step_contract import build_request_trace, build_step_meta, configure_slow_request_thresholds, normalize_failed_item, write_result_with_meta
+    from step_contract import (
+        build_request_trace,
+        build_step_meta,
+        configure_slow_request_thresholds,
+        from_timestamp_local,
+        local_now,
+        normalize_failed_item,
+        write_result_with_meta,
+    )
 
 COOLDOWN_SECONDS = 12.0
 DEFAULT_TIMEOUT = 180
 RESULTS_PER_QUERY = 10
 _last_success_at: Optional[float] = None
+_last_request_elapsed_s: Optional[float] = None
+
+
+class TimedRuntimeError(RuntimeError):
+    def __init__(self, message: str, elapsed_s: float):
+        super().__init__(message)
+        self.elapsed_s = elapsed_s
 
 
 def setup_logging(verbose: bool) -> logging.Logger:
@@ -78,10 +101,20 @@ def apply_runtime_config(defaults_dir: Path, config_dir: Optional[Path] = None) 
     return runtime
 
 
+def clear_last_request_elapsed() -> None:
+    global _last_request_elapsed_s
+    _last_request_elapsed_s = None
+
+
+def last_request_elapsed(default: float = 0.0) -> float:
+    return float(_last_request_elapsed_s if _last_request_elapsed_s is not None else default)
+
+
 def run_bb_browser_site(args: Sequence[str], timeout: Optional[int] = None) -> Dict[str, Any]:
-    global _last_success_at
+    global _last_success_at, _last_request_elapsed_s
     throttle_after_success()
     effective_timeout = int(timeout if timeout is not None else DEFAULT_TIMEOUT)
+    request_started_at = time.monotonic()
     result = subprocess.run(
         ["bb-browser", "site", *args],
         capture_output=True,
@@ -89,13 +122,15 @@ def run_bb_browser_site(args: Sequence[str], timeout: Optional[int] = None) -> D
         timeout=effective_timeout,
         env=os.environ,
     )
+    elapsed_s = time.monotonic() - request_started_at
+    _last_request_elapsed_s = elapsed_s
     if result.returncode != 0:
         message = (result.stderr or result.stdout or "bb-browser command failed").strip()
-        raise RuntimeError(message)
+        raise TimedRuntimeError(message, elapsed_s)
     try:
         payload = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Invalid JSON from bb-browser: {exc}") from exc
+        raise TimedRuntimeError(f"Invalid JSON from bb-browser: {exc}", elapsed_s) from exc
     _last_success_at = time.monotonic()
     return payload
 
@@ -135,15 +170,15 @@ def fetch_topic(topic: Dict[str, Any], logger: logging.Logger) -> Dict[str, Any]
 
     dedup_by_url: Dict[str, Dict[str, Any]] = {}
     request_traces: List[Dict[str, Any]] = []
-    started_at = time.monotonic()
-    failed_items: List[Dict[str, Any]] = []
+    total_request_elapsed_s = 0.0
     ok_queries = 0
 
     for query in queries:
         compiled_query = build_google_query(query, exclude)
-        query_started_at = time.monotonic()
         try:
+            clear_last_request_elapsed()
             payload = run_bb_browser_site(["google/news", compiled_query, str(per_query)])
+            elapsed_s = last_request_elapsed()
             results = payload.get("results", [])
             kept = 0
             for item in results:
@@ -151,36 +186,60 @@ def fetch_topic(topic: Dict[str, Any], logger: logging.Logger) -> Dict[str, Any]
                     "title": normalize_text(item.get("title", "")),
                     "link": item.get("url", ""),
                     "snippet": normalize_text(item.get("snippet", "")),
-                    "date": datetime.fromtimestamp(
-                        item.get("timestamp", time.time()),
-                        tz=timezone.utc,
-                    ).isoformat(),
+                    "summary": normalize_text(item.get("snippet", "")),
+                    "date": from_timestamp_local(item.get("timestamp", time.time())).isoformat(),
                     "topic": topic.get("id"),
                     "publisher": normalize_text(item.get("source", "")),
+                    "source_name": normalize_text(item.get("source", "")) or "Google News",
                     "google_query": compiled_query,
                 }
                 if not article["title"] or not article["link"]:
                     continue
                 dedup_by_url.setdefault(article["link"], article)
                 kept += 1
-            elapsed_s = time.monotonic() - query_started_at
-            request_traces.append(build_request_trace(compiled_query, elapsed_s, status="ok", backend="bb-browser", adapter="google/news"))
+            total_request_elapsed_s += elapsed_s
+            request_traces.append(
+                build_request_trace(
+                    topic.get("id") or compiled_query,
+                    compiled_query,
+                    elapsed_s,
+                    status="ok",
+                    source_type="google",
+                    method="CLI",
+                    attempt=1,
+                    backend="bb-browser",
+                    adapter="google/news",
+                )
+            )
             ok_queries += 1
         except Exception as exc:
             logger.warning("Google News query failed [%s]: %s", topic.get("id"), exc)
-            elapsed_s = time.monotonic() - query_started_at
-            request_traces.append(build_request_trace(compiled_query, elapsed_s, status="error", backend="bb-browser", adapter="google/news", error=str(exc)[:200]))
-            failed_items.append(normalize_failed_item(compiled_query, str(exc)[:200], elapsed_s))
+            elapsed_s = getattr(exc, "elapsed_s", last_request_elapsed())
+            total_request_elapsed_s += elapsed_s
+            request_traces.append(
+                build_request_trace(
+                    topic.get("id") or compiled_query,
+                    compiled_query,
+                    elapsed_s,
+                    status="error",
+                    source_type="google",
+                    method="CLI",
+                    attempt=1,
+                    backend="bb-browser",
+                    adapter="google/news",
+                    error=str(exc)[:200],
+                )
+            )
 
     articles = list(dedup_by_url.values())
     articles.sort(key=lambda article: article.get("date", ""), reverse=True)
     return {
         "topic_id": topic.get("id"),
         "status": "ok" if articles else "error",
-        "elapsed_s": round(time.monotonic() - started_at, 3),
+        "elapsed_s": round(total_request_elapsed_s, 3),
         "calls_total": len(queries),
         "calls_ok": ok_queries,
-        "failed_items": failed_items,
+        "failed_items": [],
         "request_traces": request_traces,
         "items": len(articles),
         "count": len(articles),
@@ -228,21 +287,22 @@ def main() -> int:
         total_queries = sum(int(result.get("calls_total", 0) or 0) for result in topic_results)
         ok_queries = sum(int(result.get("calls_ok", 0) or 0) for result in topic_results)
         articles = [article for result in topic_results for article in result.get("articles", []) if isinstance(article, dict)]
-        failed_items = [item for result in topic_results for item in result.get("failed_items", []) if isinstance(item, dict)]
         request_traces = [trace for result in topic_results for trace in result.get("request_traces", []) if isinstance(trace, dict)]
+        effective_elapsed_s = sum(float(result.get("elapsed_s", 0) or 0) for result in topic_results)
         output = {
-            "generated": datetime.now(timezone.utc).isoformat(),
+            "generated": local_now().isoformat(),
             "source_type": "google",
             "articles": articles,
         }
         meta = build_step_meta(
             step_key="google",
             status="ok" if ok_queries == total_queries and total_articles > 0 else ("partial" if ok_queries > 0 and total_articles > 0 else "error"),
-            elapsed_s=time.monotonic() - step_started_at,
+            elapsed_active_s=effective_elapsed_s,
+            elapsed_total_s=time.monotonic() - step_started_at,
             items=total_articles,
             calls_total=total_queries,
             calls_ok=ok_queries,
-            failed_items=failed_items,
+            failed_items=None,
             request_traces=request_traces,
         )
         write_result_with_meta(args.output, output, meta)
