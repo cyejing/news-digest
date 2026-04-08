@@ -126,8 +126,20 @@ class TestMergeHotspots(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             archive = root / "archive"
+            defaults = root / "defaults"
+            config = root / "config"
             input_path = root / "merge-sources.json"
             debug_output = root / "debug" / "merge-hotspots.json"
+            defaults.mkdir()
+            config.mkdir()
+            (defaults / "runtime.json").write_text(
+                json.dumps({"pipeline": {"default_hotspots_top_n": 5}}),
+                encoding="utf-8",
+            )
+            (defaults / "topics.json").write_text(
+                json.dumps({"topics": [{"id": "ai-frontier", "emoji": "🧠", "label": "AI Frontier / AI 前沿"}]}),
+                encoding="utf-8",
+            )
             input_path.write_text(
                 json.dumps(
                     {
@@ -166,6 +178,10 @@ class TestMergeHotspots(unittest.TestCase):
                 [
                     sys.executable,
                     str(SCRIPT),
+                    "--defaults",
+                    str(defaults),
+                    "--config",
+                    str(config),
                     "--input",
                     str(input_path),
                     "--archive",

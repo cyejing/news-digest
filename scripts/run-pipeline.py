@@ -28,7 +28,6 @@ news-hotspots 统一编排入口。
 import argparse
 import json
 import logging
-import os
 import shutil
 import subprocess
 import sys
@@ -315,6 +314,8 @@ def build_merge_step_spec(
 
 
 def build_hotspots_step_spec(
+        defaults_dir: Path,
+        config_dir: Optional[Path],
         debug_dir: Path,
         archive_dir: Path,
         mode: str,
@@ -322,22 +323,27 @@ def build_hotspots_step_spec(
         runtime: Dict[str, Any],
 ) -> StepSpec:
     timeout_s = int(runtime.get("pipeline", {}).get("hotspots_timeout_s", 120) or 120)
+    args = [
+        "--defaults",
+        str(defaults_dir),
+        "--input",
+        str(debug_dir / "merge-sources.json"),
+        "--archive",
+        str(archive_dir),
+        "--debug-output",
+        str(debug_dir / "merge-hotspots.json"),
+        "--top",
+        str(top_n),
+        "--mode",
+        mode,
+    ]
+    if config_dir is not None:
+        args.extend(["--config", str(config_dir)])
     return StepSpec(
         step_key=HOTSPOTS_STEP_KEY,
         name="Merge Hotspots",
         script_name="merge-hotspots.py",
-        args=[
-            "--input",
-            str(debug_dir / "merge-sources.json"),
-            "--archive",
-            str(archive_dir),
-            "--debug-output",
-            str(debug_dir / "merge-hotspots.json"),
-            "--top",
-            str(top_n),
-            "--mode",
-            mode,
-        ],
+        args=args,
         output_path=None,
         timeout_s=timeout_s,
     )
@@ -345,14 +351,6 @@ def build_hotspots_step_spec(
 
 def run_step_process(spec: StepSpec) -> ProcessResult:
     command = [sys.executable, str(SCRIPTS_DIR / spec.script_name), *spec.args]
-    env = os.environ.copy()
-
-    defaults_dir = _extract_cli_value(spec.args, "--defaults")
-    if defaults_dir:
-        env["NEWS_HOTSPOTS_DEFAULTS_DIR"] = defaults_dir
-    config_dir = _extract_cli_value(spec.args, "--config")
-    if config_dir:
-        env["NEWS_HOTSPOTS_CONFIG_DIR"] = config_dir
 
     started = time.monotonic()
     try:
@@ -361,7 +359,6 @@ def run_step_process(spec: StepSpec) -> ProcessResult:
             capture_output=True,
             text=True,
             timeout=spec.timeout_s,
-            env=env,
         )
         elapsed_s = round(time.monotonic() - started, 3)
         stdout_tail, stdout_lines = summarize_stream(completed.stdout, "stdout")
@@ -411,16 +408,6 @@ def run_step_process(spec: StepSpec) -> ProcessResult:
             command=command,
             returncode=None,
         )
-
-
-def _extract_cli_value(args: Sequence[str], flag: str) -> Optional[str]:
-    try:
-        index = list(args).index(flag)
-    except ValueError:
-        return None
-    if index + 1 >= len(args):
-        return None
-    return str(args[index + 1])
 
 
 def build_simple_meta(
@@ -565,7 +552,15 @@ def build_pipeline_meta(
         fetch_elapsed_s: float = 0.0,
         pipeline_logs: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    statuses = [summary.get("status", "error") for summary in step_summaries.values()]
+    pipeline_step_summaries: Dict[str, Dict[str, Any]] = {}
+    for step_key, summary in step_summaries.items():
+        if not isinstance(summary, dict):
+            continue
+        pipeline_step_summaries[step_key] = {
+            key: value for key, value in summary.items() if key != "step_key"
+        }
+
+    statuses = [summary.get("status", "error") for summary in pipeline_step_summaries.values()]
     if outputs.get("hotspots_output"):
         overall_status = "ok"
     elif any(status == "ok" for status in statuses):
@@ -576,7 +571,7 @@ def build_pipeline_meta(
     source_type_overview: Dict[str, Dict[str, Any]] = {}
     fetch_active_s = 0.0
     for step in ALL_SOURCE_STEPS:
-        summary = step_summaries.get(step.step_key)
+        summary = pipeline_step_summaries.get(step.step_key)
         if not isinstance(summary, dict):
             continue
         step_timing = normalize_meta_timing(summary, 0.0, 0.0)
@@ -597,23 +592,11 @@ def build_pipeline_meta(
 
     pipeline_timing = normalize_timing(fetch_active_s, time.monotonic() - started_at)
     fetch_timing = normalize_timing(fetch_active_s, fetch_elapsed_s)
-    steps = [
-        {
-            "step_key": step_key,
-            "name": summary.get("name", step_key),
-            "status": summary.get("status", "error"),
-            "timing_s": normalize_meta_timing(summary, 0.0, 0.0),
-            "items": int(summary.get("items", 0) or 0),
-            "logs": summary.get("logs", {}),
-        }
-        for step_key, summary in step_summaries.items()
-        if isinstance(summary, dict)
-    ]
     total_items = 0
-    if isinstance(step_summaries.get(HOTSPOTS_STEP_KEY), dict):
-        total_items = int(step_summaries[HOTSPOTS_STEP_KEY].get("items", 0) or 0)
-    elif isinstance(step_summaries.get(MERGE_STEP_KEY), dict):
-        total_items = int(step_summaries[MERGE_STEP_KEY].get("items", 0) or 0)
+    if isinstance(pipeline_step_summaries.get(HOTSPOTS_STEP_KEY), dict):
+        total_items = int(pipeline_step_summaries[HOTSPOTS_STEP_KEY].get("items", 0) or 0)
+    elif isinstance(pipeline_step_summaries.get(MERGE_STEP_KEY), dict):
+        total_items = int(pipeline_step_summaries[MERGE_STEP_KEY].get("items", 0) or 0)
     return {
         "pipeline_version": "3.0.0",
         "generated_at": local_now().isoformat(),
@@ -625,14 +608,13 @@ def build_pipeline_meta(
         "items": total_items,
         "call_stats": {
             "kind": "steps",
-            "total_calls": len(step_summaries),
-            "ok_calls": sum(1 for summary in step_summaries.values() if isinstance(summary, dict) and summary.get("status") == "ok"),
-            "failed_calls": sum(1 for summary in step_summaries.values() if isinstance(summary, dict) and summary.get("status") in {"error", "timeout"}),
+            "total_calls": len(pipeline_step_summaries),
+            "ok_calls": sum(1 for summary in pipeline_step_summaries.values() if isinstance(summary, dict) and summary.get("status") == "ok"),
+            "failed_calls": sum(1 for summary in pipeline_step_summaries.values() if isinstance(summary, dict) and summary.get("status") in {"error", "timeout"}),
         },
         "cooldown_s": {step.step_key: runtime.get("fetch", {}).get(step.step_key, {}).get("cooldown_s", 0) for step in ALL_SOURCE_STEPS},
         "source_type_overview": source_type_overview,
-        "step_summaries": step_summaries,
-        "steps": steps,
+        "step_summaries": pipeline_step_summaries,
         "hotspots_output": outputs.get("hotspots_output"),
         "markdown_output": outputs.get("markdown_output"),
         "merged_output": outputs.get("merged_output"),
@@ -709,7 +691,7 @@ def main() -> int:
         ),
     )
 
-    hotspots_spec = build_hotspots_step_spec(debug_dir, archive_root, args.mode, top_n, runtime)
+    hotspots_spec = build_hotspots_step_spec(args.defaults, config_dir, debug_dir, archive_root, args.mode, top_n, runtime)
     hotspots_result = run_step_process(hotspots_spec)
     hotspots_markers = parse_output_markers(hotspots_result.stdout_tail)
     hotspots_summary = build_simple_meta(

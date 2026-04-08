@@ -3,7 +3,6 @@
 
 import importlib.util
 import json
-import os
 import tempfile
 import unittest
 from datetime import timedelta
@@ -19,7 +18,7 @@ spec.loader.exec_module(source_health)
 
 
 class TestSourceHealth(unittest.TestCase):
-    def test_apply_runtime_config_prefers_env_paths(self):
+    def test_apply_runtime_config_uses_explicit_paths(self):
         with tempfile.TemporaryDirectory() as defaults_tmp, tempfile.TemporaryDirectory() as config_tmp:
             defaults_path = Path(defaults_tmp)
             config_path = Path(config_tmp)
@@ -66,15 +65,7 @@ class TestSourceHealth(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch.dict(
-                os.environ,
-                {
-                    "NEWS_HOTSPOTS_DEFAULTS_DIR": str(defaults_path),
-                    "NEWS_HOTSPOTS_CONFIG_DIR": str(config_path),
-                },
-                clear=False,
-            ):
-                source_health.apply_runtime_config()
+            source_health.apply_runtime_config(defaults_path, config_path)
 
         self.assertEqual(source_health.HISTORY_DAYS, 13)
         self.assertEqual(source_health.REPORT_LIMIT, 5)
@@ -83,7 +74,7 @@ class TestSourceHealth(unittest.TestCase):
     def test_parse_args_requires_input(self):
         old_argv = source_health.sys.argv
         try:
-            source_health.sys.argv = ["source-health.py"]
+            source_health.sys.argv = ["source-health.py", "--defaults", "/tmp/defaults"]
             with self.assertRaises(SystemExit) as ctx:
                 source_health.parse_args()
             self.assertNotEqual(ctx.exception.code, 0)
@@ -91,6 +82,29 @@ class TestSourceHealth(unittest.TestCase):
             source_health.sys.argv = old_argv
 
     def test_compute_step_state_supports_pipeline_meta(self):
+        meta = {
+            "pipeline_version": "3.0.0",
+            "status": "ok",
+            "overall_status": "ok",
+            "timing_s": {"active": 100.0, "total": 120.0},
+            "fetch_timing_s": {"active": 99.0, "total": 119.0},
+            "call_stats": {"kind": "steps", "total_calls": 4, "ok_calls": 3, "failed_calls": 0},
+            "step_summaries": {
+                "rss": {"name": "RSS", "status": "ok", "items": 12},
+                "twitter": {"name": "Twitter", "status": "skipped", "items": 0},
+                "merge-sources": {"name": "Merge", "status": "ok", "items": 21},
+                "merge-hotspots": {"name": "Hotspots", "status": "ok", "items": 21},
+            },
+        }
+
+        diagnostic = source_health.compute_step_state(meta)
+
+        self.assertEqual(diagnostic.step_key, "pipeline")
+        self.assertEqual(diagnostic.state, "warn")
+        self.assertEqual(diagnostic.details["pipeline"]["skipped_steps"], ["Twitter"])
+        self.assertEqual(diagnostic.items, 42)
+
+    def test_compute_step_state_supports_legacy_pipeline_meta_steps(self):
         meta = {
             "pipeline_version": "2.0.0",
             "overall_status": "ok",
@@ -249,6 +263,7 @@ class TestSourceHealth(unittest.TestCase):
     def test_main_reads_meta_files(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
+            (tmp_path / "runtime.json").write_text(json.dumps({"diagnostics": {}}), encoding="utf-8")
 
             (tmp_path / "rss.meta.json").write_text(
                 json.dumps(
@@ -288,6 +303,8 @@ class TestSourceHealth(unittest.TestCase):
             try:
                 source_health.sys.argv = [
                     "source-health.py",
+                    "--defaults",
+                    str(tmp_path),
                     "--input",
                     str(tmp_path),
                 ]
@@ -322,7 +339,7 @@ class TestSourceHealth(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             input_dir = Path(tmpdir)
             (input_dir / "pipeline.meta.json").write_text("{}", encoding="utf-8")
-            recent_meta_dir = input_dir / "2026-03-28" / "meta"
+            recent_meta_dir = input_dir / (source_health.local_now() - timedelta(days=1)).strftime("%Y-%m-%d") / "meta"
             recent_meta_dir.mkdir(parents=True)
             (recent_meta_dir / "rss.meta2.json").write_text("{}", encoding="utf-8")
 
@@ -342,6 +359,7 @@ class TestSourceHealth(unittest.TestCase):
     def test_main_uses_input_dir_as_unified_source(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             input_dir = Path(tmpdir)
+            (input_dir / "runtime.json").write_text(json.dumps({"diagnostics": {}}), encoding="utf-8")
 
             (input_dir / "rss.meta.json").write_text(
                 json.dumps(
@@ -381,6 +399,8 @@ class TestSourceHealth(unittest.TestCase):
             try:
                 source_health.sys.argv = [
                     "source-health.py",
+                    "--defaults",
+                    str(input_dir),
                     "--input",
                     str(input_dir),
                 ]

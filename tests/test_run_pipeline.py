@@ -35,7 +35,7 @@ step_registry = load_registry_module()
 
 
 class TestRunPipeline(unittest.TestCase):
-    def test_run_step_process_exports_defaults_and_config_env(self):
+    def test_run_step_process_does_not_export_defaults_and_config_env(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
             script_path = tmp / "envcheck.py"
@@ -47,6 +47,7 @@ class TestRunPipeline(unittest.TestCase):
                     from pathlib import Path
                     out = Path(sys.argv[sys.argv.index("--output") + 1])
                     out.write_text(json.dumps({
+                        "args": sys.argv[1:],
                         "defaults": os.environ.get("NEWS_HOTSPOTS_DEFAULTS_DIR"),
                         "config": os.environ.get("NEWS_HOTSPOTS_CONFIG_DIR"),
                     }), encoding="utf-8")
@@ -72,8 +73,12 @@ class TestRunPipeline(unittest.TestCase):
 
             self.assertEqual(result.status, "ok")
             payload = json.loads(output_path.read_text(encoding="utf-8"))
-            self.assertEqual(payload["defaults"], "/tmp/defaults")
-            self.assertEqual(payload["config"], "/tmp/config")
+            self.assertIn("--defaults", payload["args"])
+            self.assertIn("/tmp/defaults", payload["args"])
+            self.assertIn("--config", payload["args"])
+            self.assertIn("/tmp/config", payload["args"])
+            self.assertIsNone(payload["defaults"])
+            self.assertIsNone(payload["config"])
 
     def test_run_step_process_timeout(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -157,12 +162,39 @@ class TestRunPipeline(unittest.TestCase):
         )
         self.assertEqual([spec.step_key for spec in specs], list(step_registry.STEP_KEYS))
 
+    def test_build_hotspots_step_spec_passes_defaults_and_config(self):
+        spec = run_pipeline.build_hotspots_step_spec(
+            defaults_dir=Path("/tmp/defaults"),
+            config_dir=Path("/tmp/config"),
+            debug_dir=Path("/tmp/debug"),
+            archive_dir=Path("/tmp/archive"),
+            mode="daily",
+            top_n=15,
+            runtime={"pipeline": {"hotspots_timeout_s": 77}},
+        )
+        self.assertEqual(spec.timeout_s, 77)
+        self.assertEqual(
+            spec.args[:8],
+            [
+                "--defaults",
+                "/tmp/defaults",
+                "--input",
+                "/tmp/debug/merge-sources.json",
+                "--archive",
+                "/tmp/archive",
+                "--debug-output",
+                "/tmp/debug/merge-hotspots.json",
+            ],
+        )
+        self.assertIn("--config", spec.args)
+        self.assertEqual(spec.args[spec.args.index("--config") + 1], "/tmp/config")
+
     def test_build_pipeline_meta_reports_partial_when_only_some_outputs_exist(self):
         meta = run_pipeline.build_pipeline_meta(
             runtime={"fetch": {}, "pipeline": {}},
             step_summaries={
-                "rss": {"status": "ok", "items": 3, "timing_s": {"active": 4.2, "total": 4.2}, "calls_total": 2, "calls_ok": 2, "failed_calls": 0, "failed_items": [], "slow_requests": {"total_count": 1}},
-                "google": {"status": "error", "items": 0, "timing_s": {"active": 6.1, "total": 8.0}, "calls_total": 2, "calls_ok": 0, "failed_calls": 2, "failed_items": [{"source_id": "ai", "error": "boom"}], "slow_requests": {"total_count": 2}},
+                "rss": {"step_key": "rss", "status": "ok", "items": 3, "timing_s": {"active": 4.2, "total": 4.2}, "calls_total": 2, "calls_ok": 2, "failed_calls": 0, "failed_items": [], "slow_requests": {"total_count": 1}},
+                "google": {"step_key": "google", "status": "error", "items": 0, "timing_s": {"active": 6.1, "total": 8.0}, "calls_total": 2, "calls_ok": 0, "failed_calls": 2, "failed_items": [{"source_id": "ai", "error": "boom"}], "slow_requests": {"total_count": 2}},
             },
             outputs={},
             archive_root=Path("/tmp/archive"),
@@ -174,6 +206,9 @@ class TestRunPipeline(unittest.TestCase):
         self.assertEqual(meta["cleaned_archives"], 1)
         self.assertEqual(meta["fetch_timing_s"]["total"], 12.3)
         self.assertEqual(meta["fetch_active_elapsed_s"], 10.3)
+        self.assertNotIn("steps", meta)
+        self.assertNotIn("step_key", meta["step_summaries"]["rss"])
+        self.assertNotIn("step_key", meta["step_summaries"]["google"])
         rss = meta["source_type_overview"]["rss"]
         google = meta["source_type_overview"]["google"]
         self.assertTrue(rss["fully_successful"])

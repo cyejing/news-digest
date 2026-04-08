@@ -293,7 +293,12 @@ run_step() {
       ;;
     hotspots)
       [ -f "$MERGED_JSON" ] || { echo "Missing input: $MERGED_JSON" >&2; exit 1; }
-      local cmd=(uv run "$SCRIPT_DIR/merge-hotspots.py" --input "$MERGED_JSON" --archive "$DEFAULT_ARCHIVE_ROOT_DIR" --top 15 --mode daily)
+      local cmd=(uv run "$SCRIPT_DIR/merge-hotspots.py" --defaults "$DEFAULTS_DIR" --input "$MERGED_JSON" --archive "$DEFAULT_ARCHIVE_ROOT_DIR" --top 15 --mode daily)
+      if [ -n "$CONFIG_DIR" ]; then
+        cmd+=(--config "$CONFIG_DIR")
+      elif [ -d "$DEFAULT_CONFIG_DIR" ]; then
+        cmd+=(--config "$DEFAULT_CONFIG_DIR")
+      fi
       run_cmd "${cmd[@]}"
       ;;
     *)
@@ -324,7 +329,12 @@ run_unit() {
 
 run_health() {
   mkdir -p "$STEP_OUTPUT_DIR"
-  local cmd=(uv run "$SCRIPT_DIR/source-health.py" --input "$DEBUG_DIR")
+  local cmd=(uv run "$SCRIPT_DIR/source-health.py" --defaults "$DEFAULTS_DIR" --input "$DEBUG_DIR")
+  if [ -n "$CONFIG_DIR" ] && [ -d "$CONFIG_DIR" ]; then
+    cmd+=(--config "$CONFIG_DIR")
+  elif [ -d "$DEFAULT_CONFIG_DIR" ]; then
+    cmd+=(--config "$DEFAULT_CONFIG_DIR")
+  fi
   if [ "$VERBOSE" = true ]; then
     cmd+=(--verbose)
   fi

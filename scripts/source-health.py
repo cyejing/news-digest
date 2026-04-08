@@ -23,7 +23,6 @@
 
 import argparse
 import logging
-import os
 import re
 import statistics
 import sys
@@ -49,12 +48,15 @@ META_FILE_RE = re.compile(r".*\.meta\d*\.json$")
 META_SUFFIX_RE = re.compile(r"\.meta(\d*)\.json$")
 
 
-def apply_runtime_config() -> Dict[str, Any]:
+def resolve_config_dir(config_dir: Optional[Path]) -> Optional[Path]:
+    if config_dir is None:
+        return None
+    return config_dir if config_dir.exists() else None
+
+
+def apply_runtime_config(defaults_dir: Path, config_dir: Optional[Path]) -> Dict[str, Any]:
     global HISTORY_DAYS, DEGRADED_THRESHOLD, REPORT_LIMIT, ERROR_TEXT_LIMIT
-    defaults_dir = Path(os.environ.get("NEWS_HOTSPOTS_DEFAULTS_DIR", "config/defaults"))
-    config_dir = Path(os.environ.get("NEWS_HOTSPOTS_CONFIG_DIR", "workspace/config"))
-    effective_config_dir = config_dir if config_dir.exists() else None
-    runtime = load_merged_runtime_config(defaults_dir, effective_config_dir)
+    runtime = load_merged_runtime_config(defaults_dir, resolve_config_dir(config_dir))
     diagnostics = runtime.get("diagnostics", {})
     HISTORY_DAYS = int(diagnostics.get("history_days", HISTORY_DAYS) or HISTORY_DAYS)
     DEGRADED_THRESHOLD = float(diagnostics.get("degraded_threshold", DEGRADED_THRESHOLD) or DEGRADED_THRESHOLD)
@@ -239,23 +241,28 @@ def format_elapsed_suffix(elapsed_s: Any) -> str:
 def compute_pipeline_state(meta: Dict[str, Any], observed_ts: Optional[float] = None) -> DiagnosticRecord:
     observed_ts = observed_ts or time.time()
     if "step_summaries" in meta and isinstance(meta.get("step_summaries"), dict):
+        step_summaries = meta.get("step_summaries", {})
         steps = [
-            {"name": summary.get("name", step_key), "status": summary.get("status", "error")}
-            for step_key, summary in meta.get("step_summaries", {}).items()
+            {
+                "step_key": step_key,
+                "name": summary.get("name", step_key),
+                "status": summary.get("status", "error"),
+            }
+            for step_key, summary in step_summaries.items()
             if isinstance(summary, dict)
         ]
         overall_status = meta.get("status", "error")
-        hotspots_status = meta.get("step_summaries", {}).get("merge-hotspots", {}).get("status", "error") if isinstance(meta.get("step_summaries", {}).get("merge-hotspots"), dict) else "error"
-        merge_status = meta.get("step_summaries", {}).get("merge-sources", {}).get("status", "error") if isinstance(meta.get("step_summaries", {}).get("merge-sources"), dict) else "error"
+        hotspots_status = step_summaries.get("merge-hotspots", {}).get("status", "error") if isinstance(step_summaries.get("merge-hotspots"), dict) else "error"
+        merge_status = step_summaries.get("merge-sources", {}).get("status", "error") if isinstance(step_summaries.get("merge-sources"), dict) else "error"
         items = sum(
             int(summary.get("items", 0) or 0)
-            for summary in meta.get("step_summaries", {}).values()
-            if isinstance(summary, dict) and summary.get("step_key") in {"merge-hotspots", "merge-sources"}
+            for step_key, summary in step_summaries.items()
+            if isinstance(summary, dict) and step_key in {"merge-hotspots", "merge-sources"}
         )
         call_stats = meta.get("call_stats", {}) if isinstance(meta.get("call_stats"), dict) else {}
         failed_items = build_failed_items([
             item
-            for summary in meta.get("step_summaries", {}).values()
+            for summary in step_summaries.values()
             if isinstance(summary, dict)
             for item in (summary.get("failed_items", []) if isinstance(summary.get("failed_items"), list) else [])
         ])
@@ -507,6 +514,8 @@ def render_run_details(diagnostics: List[DiagnosticRecord]) -> List[str]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Read step metadata and report pipeline health diagnostics.")
+    parser.add_argument("--defaults", type=Path, required=True, help="Defaults config directory")
+    parser.add_argument("--config", type=Path, default=None, help="Workspace overlay config directory")
     parser.add_argument(
         "--input",
         type=Path,
@@ -519,7 +528,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    apply_runtime_config()
+    apply_runtime_config(args.defaults, args.config)
     logger = setup_logging(args.verbose)
     now = time.time()
     current_diagnostics: List[DiagnosticRecord] = []

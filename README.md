@@ -145,13 +145,13 @@ pip install feedparser>=6.0.0 jsonschema>=4.0.0 requests>=2.28.0 beautifulsoup4>
 Current run:
 
 ```bash
-uv run scripts/source-health.py --input workspace/archive/news-hotspots/<DATE>/meta --verbose
+uv run scripts/source-health.py --defaults config/defaults --config workspace/config --input workspace/archive/news-hotspots/<DATE>/meta --verbose
 ```
 
 Recent history:
 
 ```bash
-uv run scripts/source-health.py --input workspace/archive/news-hotspots --verbose
+uv run scripts/source-health.py --defaults config/defaults --config workspace/config --input workspace/archive/news-hotspots --verbose
 ```
 
 ## Repository

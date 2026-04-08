@@ -27,7 +27,6 @@
 
 import argparse
 import json
-import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -58,18 +57,18 @@ SELECTION_EXPLANATIONS_ZH = {
 }
 
 
-def load_runtime_config() -> Dict[str, Any]:
-    defaults_dir = Path(os.environ.get("NEWS_HOTSPOTS_DEFAULTS_DIR", "config/defaults"))
-    config_dir = Path(os.environ.get("NEWS_HOTSPOTS_CONFIG_DIR", "workspace/config"))
-    effective_config_dir = config_dir if config_dir.exists() else None
-    return load_merged_runtime_config(defaults_dir, effective_config_dir)
+def resolve_config_dir(config_dir: Optional[Path]) -> Optional[Path]:
+    if config_dir is None:
+        return None
+    return config_dir if config_dir.exists() else None
 
 
-def load_topic_metadata() -> Dict[str, Dict[str, str]]:
-    defaults_dir = Path(os.environ.get("NEWS_HOTSPOTS_DEFAULTS_DIR", "config/defaults"))
-    config_dir = Path(os.environ.get("NEWS_HOTSPOTS_CONFIG_DIR", "workspace/config"))
-    effective_config_dir = config_dir if config_dir.exists() else None
-    topics = load_merged_topics(defaults_dir, effective_config_dir)
+def load_runtime_config(defaults_dir: Path, config_dir: Optional[Path]) -> Dict[str, Any]:
+    return load_merged_runtime_config(defaults_dir, resolve_config_dir(config_dir))
+
+
+def load_topic_metadata(defaults_dir: Path, config_dir: Optional[Path]) -> Dict[str, Dict[str, str]]:
+    topics = load_merged_topics(defaults_dir, resolve_config_dir(config_dir))
     metadata: Dict[str, Dict[str, str]] = {}
     for topic in topics:
         if not isinstance(topic, dict):
@@ -436,6 +435,8 @@ def resolve_archive_pair(json_dir: Path, markdown_dir: Path, stem: str = "daily"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Render merged data into compact hotspots JSON and archived Markdown")
+    parser.add_argument("--defaults", type=Path, required=True, help="Defaults config directory")
+    parser.add_argument("--config", type=Path, default=None, help="Workspace overlay config directory")
     parser.add_argument("--input", "-i", type=Path, required=True, help="Internal pipeline JSON input")
     parser.add_argument("--archive", dest="archive", type=Path, required=True, help="Archive root dir for final hotspots outputs")
     parser.add_argument("--debug-output", type=Path, default=None, help="Optional debug hotspots JSON path")
@@ -448,7 +449,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    runtime_config = load_runtime_config()
+    runtime_config = load_runtime_config(args.defaults, args.config)
     pipeline_config = runtime_config.get("pipeline", {})
     effective_top_n = args.top if args.top is not None else int(pipeline_config.get("default_hotspots_top_n", DEFAULT_TOP_N) or DEFAULT_TOP_N)
 
@@ -465,7 +466,7 @@ def main() -> int:
 
     _, json_dir, markdown_dir = ensure_archive_dirs(args.archive)
     seen_titles, seen_links = load_seen_daily_keys(json_dir)
-    topic_metadata = load_topic_metadata()
+    topic_metadata = load_topic_metadata(args.defaults, args.config)
 
     hotspots_json = build_hotspots(
         data,

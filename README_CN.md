@@ -145,13 +145,13 @@ pip install feedparser>=6.0.0 jsonschema>=4.0.0 requests>=2.28.0 beautifulsoup4>
 查看当前运行：
 
 ```bash
-uv run scripts/source-health.py --input workspace/archive/news-hotspots/<DATE>/meta --verbose
+uv run scripts/source-health.py --defaults config/defaults --config workspace/config --input workspace/archive/news-hotspots/<DATE>/meta --verbose
 ```
 
 查看最近 7 天历史：
 
 ```bash
-uv run scripts/source-health.py --input workspace/archive/news-hotspots --verbose
+uv run scripts/source-health.py --defaults config/defaults --config workspace/config --input workspace/archive/news-hotspots --verbose
 ```
 
 ## 仓库地址

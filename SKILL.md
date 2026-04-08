@@ -58,6 +58,8 @@ files:
 
 ```bash
 uv run <SKILL_DIR>/scripts/merge-hotspots.py \
+  --defaults <SKILL_DIR>/config/defaults \
+  --config <WORKSPACE>/config \
   --input <WORKSPACE>/archive/news-hotspots/<DATE>/json/merge-sources.json \
   --archive <WORKSPACE>/archive/news-hotspots \
   --mode daily
@@ -77,6 +79,8 @@ uv run <SKILL_DIR>/scripts/merge-hotspots.py \
 
 ```bash
 uv run <SKILL_DIR>/scripts/source-health.py \
+  --defaults <SKILL_DIR>/config/defaults \
+  --config <WORKSPACE>/config \
   --input <WORKSPACE>/archive/news-hotspots/<DATE>/meta \
   --verbose
 ```
@@ -85,6 +89,8 @@ uv run <SKILL_DIR>/scripts/source-health.py \
 
 ```bash
 uv run <SKILL_DIR>/scripts/source-health.py \
+  --defaults <SKILL_DIR>/config/defaults \
+  --config <WORKSPACE>/config \
   --input <WORKSPACE>/archive/news-hotspots \
   --verbose
 ```
