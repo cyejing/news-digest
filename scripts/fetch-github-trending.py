@@ -41,11 +41,11 @@ from urllib.error import HTTPError, URLError
 
 try:
     from config_loader import load_merged_runtime_config
-    from step_contract import build_request_trace, build_step_meta, configure_slow_request_thresholds, local_now, normalize_failed_item, to_local_datetime, write_result_with_meta
+    from step_contract import build_request_trace, build_step_meta_from_traces, configure_slow_request_thresholds, local_now, normalize_failed_item, to_local_datetime, write_result_with_meta
 except ImportError:
     sys.path.append(str(Path(__file__).parent))
     from config_loader import load_merged_runtime_config
-    from step_contract import build_request_trace, build_step_meta, configure_slow_request_thresholds, local_now, normalize_failed_item, to_local_datetime, write_result_with_meta
+    from step_contract import build_request_trace, build_step_meta_from_traces, configure_slow_request_thresholds, local_now, normalize_failed_item, to_local_datetime, write_result_with_meta
 
 # ==================== 常量配置 ====================
 TIMEOUT = 60  # 请求超时时间（秒）
@@ -386,11 +386,11 @@ def main() -> int:
     }
 
     out_path = args.output or Path(tempfile.mkstemp(prefix="news-hotspots-trending-", suffix=".json")[1])
-    meta = build_step_meta(
+    step_total_elapsed_s = round(time.monotonic() - step_started_at, 3)
+    meta = build_step_meta_from_traces(
         step_key="github_trending",
         status="ok" if trending_result["queries_ok"] == trending_result["queries_total"] and len(repos) > 0 else ("partial" if trending_result["queries_ok"] > 0 and len(repos) > 0 else "error"),
-        elapsed_active_s=sum(float(trace.get("elapsed_s", 0) or 0) for trace in trending_result.get("request_traces", [])),
-        elapsed_total_s=time.monotonic() - step_started_at,
+        elapsed_total_s=step_total_elapsed_s,
         items=len(repos),
         calls_total=trending_result["queries_total"],
         calls_ok=trending_result["queries_ok"],

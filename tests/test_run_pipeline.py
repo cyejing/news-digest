@@ -174,7 +174,7 @@ class TestRunPipeline(unittest.TestCase):
         )
         self.assertEqual(spec.timeout_s, 77)
         self.assertEqual(
-            spec.args[:8],
+            spec.args[:6],
             [
                 "--defaults",
                 "/tmp/defaults",
@@ -182,8 +182,6 @@ class TestRunPipeline(unittest.TestCase):
                 "/tmp/debug/merge-sources.json",
                 "--archive",
                 "/tmp/archive",
-                "--debug-output",
-                "/tmp/debug/merge-hotspots.json",
             ],
         )
         self.assertIn("--config", spec.args)
@@ -216,6 +214,82 @@ class TestRunPipeline(unittest.TestCase):
         self.assertEqual(rss["timing_s"]["active"], 4.2)
         self.assertFalse(google["fully_successful"])
         self.assertEqual(google["failed_items_count"], 1)
+        self.assertEqual(meta["call_stats"]["failed_calls"], 1)
+        self.assertEqual(meta["call_stats"].get("partial_calls", 0), 0)
+
+    def test_build_pipeline_meta_counts_partial_steps_as_non_ok_calls(self):
+        meta = run_pipeline.build_pipeline_meta(
+            runtime={"fetch": {}, "pipeline": {}},
+            step_summaries={
+                "rss": {"step_key": "rss", "status": "ok", "items": 3, "timing_s": {"active": 4.2, "total": 4.2}, "calls_total": 2, "calls_ok": 2, "failed_calls": 0, "failed_items": [], "slow_requests": {"total_count": 1}},
+                "twitter": {"step_key": "twitter", "status": "partial", "items": 2, "timing_s": {"active": 6.1, "total": 8.0}, "calls_total": 4, "calls_ok": 3, "failed_calls": 1, "failed_items": [{"source_id": "x", "error": "boom"}], "slow_requests": {"total_count": 2}},
+            },
+            outputs={},
+            archive_root=Path("/tmp/archive"),
+            cleaned_archives=0,
+            started_at=0.0,
+            fetch_elapsed_s=12.3,
+        )
+        self.assertEqual(meta["status"], "partial")
+        self.assertEqual(meta["call_stats"]["ok_calls"], 1)
+        self.assertEqual(meta["call_stats"]["partial_calls"], 1)
+        self.assertEqual(meta["call_stats"]["failed_calls"], 1)
+
+    def test_build_pipeline_meta_counts_skipped_steps_as_non_ok_calls(self):
+        meta = run_pipeline.build_pipeline_meta(
+            runtime={"fetch": {}, "pipeline": {}},
+            step_summaries={
+                "rss": {"step_key": "rss", "status": "ok", "items": 3, "timing_s": {"active": 4.2, "total": 4.2}, "calls_total": 2, "calls_ok": 2, "failed_calls": 0, "failed_items": [], "slow_requests": {"total_count": 1}},
+                "twitter": {"step_key": "twitter", "status": "skipped", "items": 0, "timing_s": {"active": 0.0, "total": 0.0}, "calls_total": 0, "calls_ok": 0, "failed_calls": 0, "failed_items": [], "slow_requests": {"total_count": 0}},
+            },
+            outputs={},
+            archive_root=Path("/tmp/archive"),
+            cleaned_archives=0,
+            started_at=0.0,
+            fetch_elapsed_s=4.2,
+        )
+        self.assertEqual(meta["status"], "partial")
+        self.assertEqual(meta["call_stats"]["ok_calls"], 1)
+        self.assertEqual(meta["call_stats"].get("partial_calls", 0), 0)
+        self.assertEqual(meta["call_stats"]["failed_calls"], 1)
+
+    def test_summarize_merge_step_uses_single_merge_call_semantics(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            output_path = tmp / "merge-sources.json"
+            output_path.write_text(
+                json.dumps(
+                    {
+                        "input_stats": {"total_articles": 10},
+                        "output_stats": {"total_articles": 7},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            spec = run_pipeline.StepSpec(
+                step_key="merge-sources",
+                name="Merge Sources",
+                script_name="merge-sources.py",
+                args=[],
+                output_path=output_path,
+                timeout_s=300,
+            )
+            result = run_pipeline.ProcessResult(
+                step_key="merge-sources",
+                name="Merge Sources",
+                status="ok",
+                elapsed_s=1.2,
+                timeout_s=300,
+            )
+
+            summary = run_pipeline.summarize_merge_step(spec, result)
+
+        self.assertEqual(summary["items"], 7)
+        self.assertEqual(summary["calls_total"], 1)
+        self.assertEqual(summary["calls_ok"], 1)
+        self.assertEqual(summary["failed_calls"], 0)
+        self.assertEqual(summary["input_items"], 10)
+        self.assertEqual(summary["output_items"], 7)
 
     def test_cleanup_archive_root_uses_local_dates(self):
         with tempfile.TemporaryDirectory() as tmpdir:

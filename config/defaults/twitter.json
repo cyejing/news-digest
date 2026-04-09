@@ -54,16 +54,6 @@
       "topic": "ai-frontier"
     },
     {
-      "id": "deepmind-twitter",
-      "type": "twitter",
-      "name": "Google DeepMind official",
-      "handle": "GoogleDeepMind",
-      "enabled": true,
-      "priority": 3,
-      "note": "Google DeepMind 官方账号",
-      "topic": "ai-frontier"
-    },
-    {
       "id": "googleai-twitter",
       "type": "twitter",
       "name": "Google AI official",
@@ -134,16 +124,6 @@
       "topic": "ai-frontier"
     },
     {
-      "id": "sebastian-twitter",
-      "type": "twitter",
-      "name": "Sebastian Raschka",
-      "handle": "rasbt",
-      "enabled": true,
-      "priority": 3,
-      "note": "AI 研究者",
-      "topic": "ai-frontier"
-    },
-    {
       "id": "elon-twitter",
       "type": "twitter",
       "name": "Elon Musk",
@@ -162,16 +142,6 @@
       "priority": 3,
       "note": "Google 首席执行官",
       "topic": "technology"
-    },
-    {
-      "id": "pmarca-twitter",
-      "type": "twitter",
-      "name": "Marc Andreessen",
-      "handle": "pmarca",
-      "enabled": true,
-      "priority": 3,
-      "note": "a16z 合伙人",
-      "topic": "business"
     },
     {
       "id": "levie-twitter",

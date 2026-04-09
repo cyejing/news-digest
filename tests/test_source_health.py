@@ -88,7 +88,7 @@ class TestSourceHealth(unittest.TestCase):
             "overall_status": "ok",
             "timing_s": {"active": 100.0, "total": 120.0},
             "fetch_timing_s": {"active": 99.0, "total": 119.0},
-            "call_stats": {"kind": "steps", "total_calls": 4, "ok_calls": 3, "failed_calls": 0},
+            "call_stats": {"kind": "steps", "total_calls": 4, "ok_calls": 3, "partial_calls": 0, "failed_calls": 0},
             "step_summaries": {
                 "rss": {"name": "RSS", "status": "ok", "items": 12},
                 "twitter": {"name": "Twitter", "status": "skipped", "items": 0},
@@ -103,6 +103,28 @@ class TestSourceHealth(unittest.TestCase):
         self.assertEqual(diagnostic.state, "warn")
         self.assertEqual(diagnostic.details["pipeline"]["skipped_steps"], ["Twitter"])
         self.assertEqual(diagnostic.items, 42)
+
+    def test_compute_step_state_marks_pipeline_partial_steps_as_warn(self):
+        meta = {
+            "pipeline_version": "3.0.0",
+            "status": "partial",
+            "overall_status": "partial",
+            "timing_s": {"active": 100.0, "total": 120.0},
+            "fetch_timing_s": {"active": 99.0, "total": 119.0},
+            "call_stats": {"kind": "steps", "total_calls": 4, "ok_calls": 3, "partial_calls": 1, "failed_calls": 1},
+            "step_summaries": {
+                "rss": {"name": "RSS", "status": "ok", "items": 12},
+                "twitter": {"name": "Twitter", "status": "partial", "items": 8},
+                "merge-sources": {"name": "Merge", "status": "ok", "items": 21},
+                "merge-hotspots": {"name": "Hotspots", "status": "ok", "items": 21},
+            },
+        }
+
+        diagnostic = source_health.compute_step_state(meta)
+
+        self.assertEqual(diagnostic.state, "warn")
+        self.assertEqual(diagnostic.details["pipeline"]["partial_steps"], ["Twitter"])
+        self.assertEqual(diagnostic.call_stats["partial_calls"], 1)
 
     def test_compute_step_state_supports_legacy_pipeline_meta_steps(self):
         meta = {
@@ -472,6 +494,26 @@ class TestSourceHealth(unittest.TestCase):
             "ai-frontier: [error] site google/news: Error: Timed out loading Google news results | Report: very noisy tail | elapsed:583.1s",
             output,
         )
+
+    def test_render_run_details_includes_partial_call_count_when_present(self):
+        diagnostics = [
+            source_health.DiagnosticRecord(
+                run_label="2026-03-28-2",
+                step_key="pipeline",
+                name="Pipeline",
+                state="warn",
+                status="partial",
+                elapsed_s=583.1,
+                items=192,
+                call_stats={"kind": "steps", "total_calls": 11, "ok_calls": 10, "partial_calls": 1, "failed_calls": 1},
+                failed_items=[],
+                details={},
+                observed_ts=0,
+            )
+        ]
+
+        output = "\n".join(source_health.render_run_details(diagnostics))
+        self.assertIn("⚠️ Pipeline - calls:10/1/11 | partial:1 | items:192 | elapsed:583.1s", output)
 
     def test_render_run_details_prefers_failed_item_elapsed(self):
         diagnostics = [

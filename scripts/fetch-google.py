@@ -37,7 +37,7 @@ try:
     from config_loader import load_merged_runtime_config, load_merged_topics
     from step_contract import (
         build_request_trace,
-        build_step_meta,
+        build_step_meta_from_traces,
         configure_slow_request_thresholds,
         from_timestamp_local,
         local_now,
@@ -49,7 +49,7 @@ except ImportError:
     from config_loader import load_merged_runtime_config, load_merged_topics
     from step_contract import (
         build_request_trace,
-        build_step_meta,
+        build_step_meta_from_traces,
         configure_slow_request_thresholds,
         from_timestamp_local,
         local_now,
@@ -288,17 +288,15 @@ def main() -> int:
         ok_queries = sum(int(result.get("calls_ok", 0) or 0) for result in topic_results)
         articles = [article for result in topic_results for article in result.get("articles", []) if isinstance(article, dict)]
         request_traces = [trace for result in topic_results for trace in result.get("request_traces", []) if isinstance(trace, dict)]
-        effective_elapsed_s = sum(float(result.get("elapsed_s", 0) or 0) for result in topic_results)
         output = {
             "generated": local_now().isoformat(),
             "source_type": "google",
             "articles": articles,
         }
-        meta = build_step_meta(
+        meta = build_step_meta_from_traces(
             step_key="google",
             status="ok" if ok_queries == total_queries and total_articles > 0 else ("partial" if ok_queries > 0 and total_articles > 0 else "error"),
-            elapsed_active_s=effective_elapsed_s,
-            elapsed_total_s=time.monotonic() - step_started_at,
+            elapsed_total_s=round(time.monotonic() - step_started_at, 3),
             items=total_articles,
             calls_total=total_queries,
             calls_ok=ok_queries,

@@ -238,6 +238,19 @@ def format_elapsed_suffix(elapsed_s: Any) -> str:
     return f" | elapsed:{elapsed:.1f}s"
 
 
+def normalize_call_stats(call_stats: Any, *, kind: str, total_calls: int, ok_calls: int, failed_calls: int, partial_calls: int = 0) -> Dict[str, Any]:
+    payload = {
+        "kind": str((call_stats or {}).get("kind", kind) if isinstance(call_stats, dict) else kind),
+        "total_calls": int((call_stats or {}).get("total_calls", total_calls) if isinstance(call_stats, dict) else total_calls or 0),
+        "ok_calls": int((call_stats or {}).get("ok_calls", ok_calls) if isinstance(call_stats, dict) else ok_calls or 0),
+        "failed_calls": int((call_stats or {}).get("failed_calls", failed_calls) if isinstance(call_stats, dict) else failed_calls or 0),
+    }
+    normalized_partial = int((call_stats or {}).get("partial_calls", partial_calls) if isinstance(call_stats, dict) else partial_calls or 0)
+    if normalized_partial > 0:
+        payload["partial_calls"] = normalized_partial
+    return payload
+
+
 def compute_pipeline_state(meta: Dict[str, Any], observed_ts: Optional[float] = None) -> DiagnosticRecord:
     observed_ts = observed_ts or time.time()
     if "step_summaries" in meta and isinstance(meta.get("step_summaries"), dict):
@@ -279,12 +292,15 @@ def compute_pipeline_state(meta: Dict[str, Any], observed_ts: Optional[float] = 
         elapsed_s = float(meta.get("timing_s", {}).get("total", 0) or 0)
         fetch_elapsed_s = float(meta.get("fetch_timing_s", {}).get("total", 0) or 0)
     failed_steps = [step.get("name", "unknown") for step in steps if step.get("status") in {"error", "timeout"}]
+    partial_steps = [step.get("name", "unknown") for step in steps if step.get("status") == "partial"]
     skipped_steps = [step.get("name", "unknown") for step in steps if step.get("status") == "skipped"]
 
     if overall_status in {"error", "timeout"} or merge_status != "ok" or hotspots_status != "ok":
         state = "error"
     elif failed_steps:
         state = "error"
+    elif partial_steps:
+        state = "warn"
     elif skipped_steps:
         state = "warn"
     else:
@@ -296,19 +312,20 @@ def compute_pipeline_state(meta: Dict[str, Any], observed_ts: Optional[float] = 
         state=state,
         elapsed_s=elapsed_s,
         items=items,
-        call_stats={
-            "kind": str(call_stats.get("kind", "steps")),
-            "total_calls": int(call_stats.get("total_calls", len(steps)) or 0),
-            "ok_calls": int(call_stats.get("ok_calls", sum(1 for step in steps if step.get("status") == "ok")) or 0),
-            "failed_calls": int(
-                call_stats.get("failed_calls", sum(1 for step in steps if step.get("status") in {"error", "timeout"})) or 0
-            ),
-        },
+        call_stats=normalize_call_stats(
+            call_stats,
+            kind="steps",
+            total_calls=len(steps),
+            ok_calls=sum(1 for step in steps if step.get("status") == "ok"),
+            failed_calls=sum(1 for step in steps if step.get("status") in {"partial", "error", "timeout"}),
+            partial_calls=sum(1 for step in steps if step.get("status") == "partial"),
+        ),
         failed_items=failed_items,
         details={
             "pipeline": {
                 "fetch_elapsed_s": fetch_elapsed_s,
                 "failed_steps": failed_steps,
+                "partial_steps": partial_steps,
                 "skipped_steps": skipped_steps,
                 "hotspots_status": hotspots_status,
                 "step_count": len(steps),
@@ -330,6 +347,7 @@ def compute_step_state(meta: Dict[str, Any], observed_ts: Optional[float] = None
     total_calls = int(call_stats.get("total_calls", 0) or 0)
     ok_calls = int(call_stats.get("ok_calls", 0) or 0)
     failed_calls = int(call_stats.get("failed_calls", 0) or 0)
+    partial_calls = int(call_stats.get("partial_calls", 0) or 0)
     warning_reasons: List[str] = []
 
     if status in {"error", "timeout", "pending"}:
@@ -342,6 +360,9 @@ def compute_step_state(meta: Dict[str, Any], observed_ts: Optional[float] = None
     if failed_calls > 0 and state == "ok":
         state = "warn"
         warning_reasons.append(f"{failed_calls} call failures")
+    if partial_calls > 0 and state == "ok":
+        state = "warn"
+        warning_reasons.append(f"{partial_calls} partial calls")
 
     deduplication = details.get("deduplication", {}) if isinstance(details.get("deduplication"), dict) else {}
     if deduplication:
@@ -360,12 +381,14 @@ def compute_step_state(meta: Dict[str, Any], observed_ts: Optional[float] = None
         state=state,
         elapsed_s=float(meta.get("timing_s", {}).get("total", 0) or 0),
         items=items,
-        call_stats={
-            "kind": str(call_stats.get("kind", meta.get("step_key", "step"))),
-            "total_calls": total_calls,
-            "ok_calls": ok_calls,
-            "failed_calls": failed_calls,
-        },
+        call_stats=normalize_call_stats(
+            call_stats,
+            kind=meta.get("step_key", "step"),
+            total_calls=total_calls,
+            ok_calls=ok_calls,
+            failed_calls=failed_calls,
+            partial_calls=partial_calls,
+        ),
         failed_items=build_failed_items(meta.get("failed_items", [])),
         details={**details, "reasons": warning_reasons},
         observed_ts=observed_ts,
@@ -499,10 +522,12 @@ def render_run_details(diagnostics: List[DiagnosticRecord]) -> List[str]:
             call_stats = item.call_stats
             ok_calls = int(call_stats.get("ok_calls", 0) or 0)
             failed_calls = int(call_stats.get("failed_calls", 0) or 0)
+            partial_calls = int(call_stats.get("partial_calls", 0) or 0)
             total_calls = int(call_stats.get("total_calls", 0) or 0)
-            lines.append(
-                f"{icon} {item.name:<{name_width}} - calls:{ok_calls}/{failed_calls}/{total_calls} | items:{item.items} | elapsed:{float(item.elapsed_s or 0):.1f}s"
-            )
+            call_summary = f"calls:{ok_calls}/{failed_calls}/{total_calls}"
+            if partial_calls > 0:
+                call_summary += f" | partial:{partial_calls}"
+            lines.append(f"{icon} {item.name:<{name_width}} - {call_summary} | items:{item.items} | elapsed:{float(item.elapsed_s or 0):.1f}s")
             for failed_item in item.failed_items:
                 failed_elapsed = failed_item.get("elapsed_s", item.elapsed_s)
                 lines.append(
@@ -514,7 +539,7 @@ def render_run_details(diagnostics: List[DiagnosticRecord]) -> List[str]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Read step metadata and report pipeline health diagnostics.")
-    parser.add_argument("--defaults", type=Path, required=True, help="Defaults config directory")
+    parser.add_argument("--defaults", type=Path, default=Path("config/defaults"), help="Defaults config directory")
     parser.add_argument("--config", type=Path, default=None, help="Workspace overlay config directory")
     parser.add_argument(
         "--input",

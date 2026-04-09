@@ -239,16 +239,6 @@ def build_request_timing_summary(traces: Iterable[Dict[str, Any]], default_sourc
     total = len(valid_traces)
     ok = sum(1 for trace in valid_traces if trace.get("status") == "ok")
     error = total - ok
-    slow_bucket_stats = [
-        {
-            "label": bucket["label"],
-            "threshold_s": bucket["threshold_s"],
-            "upper_bound_s": bucket["upper_bound_s"],
-            "count": bucket["count"],
-            "rate": bucket["rate"],
-        }
-        for bucket in _build_threshold_buckets(valid_traces, default_source_type=default_source_type)
-    ]
     return {
         "requests_total": total,
         "requests_ok": ok,
@@ -280,7 +270,6 @@ def build_request_timing_summary(traces: Iterable[Dict[str, Any]], default_sourc
                 "p95": _quantile(total_values, 0.95),
             },
         },
-        "slow_request_buckets": slow_bucket_stats,
     }
 
 
@@ -314,6 +303,84 @@ def derive_status(calls_total: int, calls_ok: int, items: int) -> str:
     return "ok"
 
 
+def build_call_stats(
+    *,
+    kind: str,
+    total_calls: int,
+    ok_calls: int,
+    partial_calls: int = 0,
+    failed_calls: Optional[int] = None,
+) -> Dict[str, int | str]:
+    normalized_total = max(0, int(total_calls or 0))
+    normalized_ok = max(0, int(ok_calls or 0))
+    normalized_partial = max(0, int(partial_calls or 0))
+    normalized_failed = max(0, normalized_total - normalized_ok) if failed_calls is None else max(0, int(failed_calls or 0))
+    payload: Dict[str, int | str] = {
+        "kind": str(kind or "step"),
+        "total_calls": normalized_total,
+        "ok_calls": normalized_ok,
+        "failed_calls": normalized_failed,
+    }
+    if normalized_partial > 0:
+        payload["partial_calls"] = normalized_partial
+    return payload
+
+
+def summarize_step_statuses(step_summaries: Iterable[Dict[str, Any]]) -> Dict[str, int]:
+    normalized_statuses = [
+        str(summary.get("status", "error"))
+        for summary in step_summaries
+        if isinstance(summary, dict)
+    ]
+    return {
+        "total": len(normalized_statuses),
+        "ok": sum(1 for status in normalized_statuses if status == "ok"),
+        "partial": sum(1 for status in normalized_statuses if status == "partial"),
+        "error": sum(1 for status in normalized_statuses if status in {"error", "timeout"}),
+        "skipped": sum(1 for status in normalized_statuses if status == "skipped"),
+        "non_ok": sum(1 for status in normalized_statuses if status != "ok"),
+    }
+
+
+def build_pipeline_call_stats(step_summaries: Iterable[Dict[str, Any]]) -> Dict[str, int | str]:
+    counts = summarize_step_statuses(step_summaries)
+    return build_call_stats(
+        kind="steps",
+        total_calls=counts["total"],
+        ok_calls=counts["ok"],
+        partial_calls=counts["partial"],
+        failed_calls=counts["non_ok"],
+    )
+
+
+def derive_pipeline_status(step_summaries: Iterable[Dict[str, Any]]) -> str:
+    counts = summarize_step_statuses(step_summaries)
+    if counts["total"] <= 0:
+        return "error"
+    if counts["non_ok"] == 0:
+        return "ok"
+    if counts["ok"] > 0 or counts["partial"] > 0 or counts["skipped"] > 0:
+        return "partial"
+    return "error"
+
+
+def active_elapsed_from_traces(
+    traces: Iterable[Dict[str, Any]],
+    elapsed_total_s: Optional[float] = None,
+    default_source_type: str = "",
+) -> float:
+    normalized = [
+        _normalize_request_record(trace, default_source_type=default_source_type)
+        for trace in traces
+        if isinstance(trace, dict)
+    ]
+    active_elapsed_s = round(sum(timing_active(trace) for trace in normalized), 3)
+    if elapsed_total_s is None:
+        return active_elapsed_s
+    total_elapsed_s = round(float(elapsed_total_s or 0), 3)
+    return min(total_elapsed_s, active_elapsed_s)
+
+
 def build_step_meta(
     *,
     step_key: str,
@@ -340,12 +407,11 @@ def build_step_meta(
         "calls_total": int(calls_total),
         "calls_ok": int(calls_ok),
         "failed_calls": max(0, int(calls_total) - int(calls_ok)),
-        "call_stats": {
-            "kind": step_key,
-            "total_calls": int(calls_total),
-            "ok_calls": int(calls_ok),
-            "failed_calls": max(0, int(calls_total) - int(calls_ok)),
-        },
+        "call_stats": build_call_stats(
+            kind=step_key,
+            total_calls=int(calls_total),
+            ok_calls=int(calls_ok),
+        ),
         "failed_items": derived_failed_items if failed_items is None else [
             _normalize_request_record(item, default_source_type=step_key)
             for item in failed_items
@@ -354,6 +420,35 @@ def build_step_meta(
         "request_timing_summary": build_request_timing_summary(traces, default_source_type=step_key),
         "slow_requests": build_slow_requests(traces, default_source_type=step_key),
     }
+
+
+def build_step_meta_from_traces(
+    *,
+    step_key: str,
+    status: str,
+    elapsed_total_s: float,
+    items: int,
+    calls_total: int,
+    calls_ok: int,
+    failed_items: Optional[List[Dict[str, Any]]] = None,
+    request_traces: Iterable[Dict[str, Any]] = (),
+) -> Dict[str, Any]:
+    request_trace_list = [trace for trace in request_traces if isinstance(trace, dict)]
+    return build_step_meta(
+        step_key=step_key,
+        status=status,
+        elapsed_active_s=active_elapsed_from_traces(
+            request_trace_list,
+            elapsed_total_s=elapsed_total_s,
+            default_source_type=step_key,
+        ),
+        elapsed_total_s=elapsed_total_s,
+        items=items,
+        calls_total=calls_total,
+        calls_ok=calls_ok,
+        failed_items=failed_items,
+        request_traces=request_trace_list,
+    )
 
 
 def build_meta(**kwargs: Any) -> Dict[str, Any]:

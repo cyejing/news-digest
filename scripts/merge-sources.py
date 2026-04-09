@@ -86,6 +86,15 @@ SCORE_DEBUG_COMMENTS = {
     "reranking_debug": "兼容旧字段。当前 topic 内顺序直接按 final_score 降序输出，不再在 merge-sources 阶段做二次重排。",
 }
 
+SCORE_COMPONENT_KEYS = (
+    "base_priority_score",
+    "fetch_local_rank_score",
+    "history_score",
+    "cross_source_hot_score",
+    "recency_score",
+    "local_extra_score",
+)
+
 SCORE_ENGAGEMENT_VIRAL = 5
 SCORE_ENGAGEMENT_HIGH = 3
 SCORE_ENGAGEMENT_MED = 2
@@ -483,44 +492,195 @@ def calculate_recency_score_details(article: Dict[str, Any]) -> Dict[str, Any]:
     return {"score": 0.0, "hours_old": round(hours_old, 3), "bucket": "older"}
 
 
+def build_empty_score_components() -> Dict[str, float]:
+    return {key: 0.0 for key in SCORE_COMPONENT_KEYS}
+
+
+def build_empty_work_state() -> Dict[str, Any]:
+    return {
+        "score_components": build_empty_score_components(),
+        "similarity_features": None,
+    }
+
+
+def ensure_work_state(article: Dict[str, Any]) -> Dict[str, Any]:
+    raw_state = article.get("_work_state")
+    if not isinstance(raw_state, dict):
+        raw_state = build_empty_work_state()
+    raw_score_components = raw_state.get("score_components")
+    if not isinstance(raw_score_components, dict):
+        raw_score_components = {}
+    normalized_score_components = build_empty_score_components()
+    for key in SCORE_COMPONENT_KEYS:
+        normalized_score_components[key] = float(raw_score_components.get(key, 0.0) or 0.0)
+    raw_state["score_components"] = normalized_score_components
+    similarity_features = raw_state.get("similarity_features")
+    raw_state["similarity_features"] = similarity_features if isinstance(similarity_features, dict) else None
+    article["_work_state"] = raw_state
+    return raw_state
+
+
+def ensure_score_components(article: Dict[str, Any]) -> Dict[str, float]:
+    work_state = ensure_work_state(article)
+    return work_state["score_components"]
+
+
+def ensure_similarity_features(article: Dict[str, Any]) -> Dict[str, Any]:
+    work_state = ensure_work_state(article)
+    similarity_features = work_state.get("similarity_features")
+    if not isinstance(similarity_features, dict):
+        similarity_features = build_similarity_features(article)
+        work_state["similarity_features"] = similarity_features
+    return similarity_features
+
+
+def export_score_components(article: Dict[str, Any]) -> Dict[str, float]:
+    score_components = article.get("score_components", {}) if isinstance(article.get("score_components"), dict) else {}
+    return {
+        key: float(score_components.get(key, 0.0) or 0.0)
+        for key in SCORE_COMPONENT_KEYS
+    }
+
+
+def build_similarity_debug_state() -> Dict[str, Any]:
+    return {
+        "_comment": SCORE_DEBUG_COMMENTS["similarity_debug"],
+        "history_similarity": 0.0,
+        "history_duplicate": False,
+        "duplicate_group": {
+            "merged": False,
+            "cluster_size": 1,
+        },
+        "cross_source_hot": {
+            "matched_source_type_count": 0,
+            "score": 0.0,
+        },
+        "fields_comment_zh": {
+            "history_similarity": "与历史热点标题的最高相似度，范围通常为 0 到 1。",
+            "history_duplicate": "是否因为命中历史重复分值规则而被判定为历史重复内容。",
+            "duplicate_group": "当前文章是否与其他文章合并，以及合并后的重复簇大小。",
+            "cross_source_hot": "当前文章被多个不同 source_type 同时命中时，对应的命中数和分值影响。",
+        },
+    }
+
+
+def ensure_similarity_debug(article: Dict[str, Any]) -> Dict[str, Any]:
+    raw_debug = article.get("similarity_debug")
+    if not isinstance(raw_debug, dict):
+        raw_debug = build_similarity_debug_state()
+    raw_debug.setdefault("_comment", SCORE_DEBUG_COMMENTS["similarity_debug"])
+    raw_debug.setdefault("history_similarity", 0.0)
+    raw_debug.setdefault("history_duplicate", False)
+    duplicate_group = raw_debug.get("duplicate_group")
+    if not isinstance(duplicate_group, dict):
+        duplicate_group = {"merged": False, "cluster_size": 1}
+    duplicate_group.setdefault("merged", False)
+    duplicate_group.setdefault("cluster_size", 1)
+    raw_debug["duplicate_group"] = duplicate_group
+    cross_source_hot = raw_debug.get("cross_source_hot")
+    if not isinstance(cross_source_hot, dict):
+        cross_source_hot = {"matched_source_type_count": 0, "score": 0.0}
+    cross_source_hot.setdefault("matched_source_type_count", 0)
+    cross_source_hot.setdefault("score", 0.0)
+    raw_debug["cross_source_hot"] = cross_source_hot
+    raw_debug.setdefault("fields_comment_zh", build_similarity_debug_state()["fields_comment_zh"])
+    article["similarity_debug"] = raw_debug
+    return raw_debug
+
+
+def build_scoring_debug_state() -> Dict[str, Any]:
+    return {
+        "_comment": SCORE_DEBUG_COMMENTS["scoring_debug"],
+        "final_score_formula": "base_priority_score + fetch_local_rank_score + history_score + cross_source_hot_score + recency_score",
+    }
+
+
+def ensure_scoring_debug(article: Dict[str, Any]) -> Dict[str, Any]:
+    raw_debug = article.get("scoring_debug")
+    if not isinstance(raw_debug, dict):
+        raw_debug = build_scoring_debug_state()
+    raw_debug.setdefault("_comment", SCORE_DEBUG_COMMENTS["scoring_debug"])
+    raw_debug.setdefault("final_score_formula", build_scoring_debug_state()["final_score_formula"])
+    article["scoring_debug"] = raw_debug
+    return raw_debug
+
+
+def set_history_similarity_debug(article: Dict[str, Any], *, similarity: float, is_duplicate: bool) -> None:
+    similarity_debug = ensure_similarity_debug(article)
+    similarity_debug["history_similarity"] = round(similarity, 4)
+    similarity_debug["history_duplicate"] = bool(is_duplicate)
+
+
+def set_cross_source_hot_debug(article: Dict[str, Any], *, matched_source_type_count: int, score: float) -> None:
+    similarity_debug = ensure_similarity_debug(article)
+    similarity_debug["cross_source_hot"]["matched_source_type_count"] = int(matched_source_type_count)
+    similarity_debug["cross_source_hot"]["score"] = float(score or 0.0)
+
+
+def set_duplicate_group_debug(article: Dict[str, Any], *, cluster_size: int) -> None:
+    similarity_debug = ensure_similarity_debug(article)
+    similarity_debug["duplicate_group"] = {
+        "merged": cluster_size > 1,
+        "cluster_size": int(cluster_size),
+    }
+
+
+def set_final_score_debug(article: Dict[str, Any], score_components: Dict[str, float]) -> None:
+    scoring_debug = ensure_scoring_debug(article)
+    scoring_debug["final_score"] = {
+        "_comment": SCORE_DEBUG_COMMENTS["final_score"],
+        "value": article["final_score"],
+        "components": {
+            "base_priority_score": score_components["base_priority_score"],
+            "local_extra_score": score_components["local_extra_score"],
+            "fetch_local_rank_score": score_components["fetch_local_rank_score"],
+            "history_score": score_components["history_score"],
+            "cross_source_hot_score": score_components["cross_source_hot_score"],
+            "recency_score": score_components["recency_score"],
+        },
+        "components_comment_zh": {
+            "base_priority_score": "基础分，来自 source_priority。",
+            "local_extra_score": "源内热度参考分，用于解释该条内容的站内热度信号。",
+            "fetch_local_rank_score": "同 source_type 内按排序位置得到的分值影响。",
+            "history_score": "与历史热点相似时带来的分值影响，重复时通常为负分。",
+            "cross_source_hot_score": "被多个不同 source_type 命中时的分值影响。",
+            "recency_score": "时效性带来的分值影响。",
+        },
+    }
+
+
+def set_article_final_score(article: Dict[str, Any], value: float) -> None:
+    article["final_score"] = round(float(value or 0.0), 3)
+
+
+def set_article_topic(article: Dict[str, Any], topic: str) -> None:
+    article["topic"] = str(topic or "").strip()
+
+
+def set_article_multi_source(article: Dict[str, Any], is_multi_source: bool) -> None:
+    article["multi_source"] = bool(is_multi_source)
+
+
+def normalize_article_source_priority(article: Dict[str, Any]) -> None:
+    article["source_priority"] = normalize_priority(article.get("source_priority", article.get("priority", 3)))
+
+
 def initialize_article_scores(articles: List[Dict[str, Any]]) -> None:
     for article in articles:
         source_type = article.get("source_type", "")
         base_priority_score = float(normalize_priority(article.get("source_priority", 3)))
         local_extra_details = calculate_local_extra_details(article, source_type)
         local_extra_score = local_extra_details["score"]
-        article["_score_components"] = {
-            "base_priority_score": base_priority_score,
-            "local_extra_score": local_extra_score,
-            "fetch_local_rank_score": 0.0,
-            "history_score": 0.0,
-            "cross_source_hot_score": 0.0,
-            "recency_score": 0.0,
+        score_components = build_empty_score_components()
+        score_components["base_priority_score"] = base_priority_score
+        score_components["local_extra_score"] = local_extra_score
+        article["_work_state"] = {
+            "score_components": score_components,
+            "similarity_features": None,
         }
-        article["similarity_debug"] = {
-            "_comment": SCORE_DEBUG_COMMENTS["similarity_debug"],
-            "history_similarity": 0.0,
-            "history_duplicate": False,
-            "duplicate_group": {
-                "merged": False,
-                "cluster_size": 1,
-            },
-            "cross_source_hot": {
-                "matched_source_type_count": 0,
-                "score": 0.0,
-            },
-            "fields_comment_zh": {
-                "history_similarity": "与历史热点标题的最高相似度，范围通常为 0 到 1。",
-                "history_duplicate": "是否因为命中历史重复分值规则而被判定为历史重复内容。",
-                "duplicate_group": "当前文章是否与其他文章合并，以及合并后的重复簇大小。",
-                "cross_source_hot": "当前文章被多个不同 source_type 同时命中时，对应的命中数和分值影响。",
-            },
-        }
-        article["scoring_debug"] = {
-            "_comment": SCORE_DEBUG_COMMENTS["scoring_debug"],
-            "final_score_formula": "base_priority_score + fetch_local_rank_score + history_score + cross_source_hot_score + recency_score",
-        }
-        article["final_score"] = base_priority_score
+        article["similarity_debug"] = build_similarity_debug_state()
+        article["scoring_debug"] = build_scoring_debug_state()
+        set_article_final_score(article, base_priority_score)
 
 
 def assign_fetch_rank_scores(articles: List[Dict[str, Any]]) -> None:
@@ -532,7 +692,7 @@ def assign_fetch_rank_scores(articles: List[Dict[str, Any]]) -> None:
         ordered = sorted(
             group,
             key=lambda item: (
-                -(item["_score_components"]["base_priority_score"] + item["_score_components"]["local_extra_score"]),
+                -(ensure_score_components(item)["base_priority_score"] + ensure_score_components(item)["local_extra_score"]),
                 item.get("title", ""),
             ),
         )
@@ -543,7 +703,7 @@ def assign_fetch_rank_scores(articles: List[Dict[str, Any]]) -> None:
             else:
                 rank_pct = 1.0 - ((rank - 1) / (total - 1))
             rank_score = round(SCORING_CONFIG["fetch_rank_max"] * rank_pct, 3)
-            article["_score_components"]["fetch_local_rank_score"] = rank_score
+            ensure_score_components(article)["fetch_local_rank_score"] = rank_score
         logging.debug("Assigned fetch-local rank scores for %s (%d items)", fetch_type, total)
 
 
@@ -617,7 +777,7 @@ def iter_history_candidates(article_features: Dict[str, Any], previous_index: Di
 def best_history_similarity(article: Dict[str, Any], previous_index: Dict[str, Any]) -> float:
     if not previous_index["features"]:
         return 0.0
-    article_features = article["_similarity_features"]
+    article_features = ensure_similarity_features(article)
     best = 0.0
     for previous in iter_history_candidates(article_features, previous_index):
         if not should_compare(article_features, previous):
@@ -642,10 +802,8 @@ def apply_history_scores(articles: List[Dict[str, Any]], previous_titles: Iterab
     for article in articles:
         similarity = best_history_similarity(article, previous_index)
         score = history_score_for_similarity(similarity)
-        article["similarity_debug"]["history_similarity"] = round(similarity, 4)
-        article["_score_components"]["history_score"] = score
-        if score < 0:
-            article["similarity_debug"]["history_duplicate"] = True
+        ensure_score_components(article)["history_score"] = score
+        set_history_similarity_debug(article, similarity=similarity, is_duplicate=score < 0)
     logging.info("History similarity scoring finished in %.3fs", time.perf_counter() - started)
 
 
@@ -657,7 +815,7 @@ def build_candidate_pairs(articles: List[Dict[str, Any]]) -> Iterable[Tuple[int,
     compact_buckets: Dict[str, List[int]] = defaultdict(list)
 
     for idx, article in enumerate(articles):
-        features = article["_similarity_features"]
+        features = ensure_similarity_features(article)
         for token in features["word_tokens"]:
             word_buckets[token].append(idx)
         for token in features["cjk_bigrams"]:
@@ -761,13 +919,13 @@ def apply_cross_source_hot_scores(articles: List[Dict[str, Any]], pair_similarit
             SCORING_CONFIG["cross_source_hot_score_per_extra_type"] * extra_types,
         )
         for idx in indices:
-            articles[idx]["_score_components"]["cross_source_hot_score"] = score
-            articles[idx]["similarity_debug"]["cross_source_hot"]["matched_source_type_count"] = extra_types
+            ensure_score_components(articles[idx])["cross_source_hot_score"] = score
+            set_cross_source_hot_debug(articles[idx], matched_source_type_count=extra_types, score=score)
 
 
 def recalculate_final_scores(articles: List[Dict[str, Any]]) -> None:
     for article in articles:
-        score_components = article["_score_components"]
+        score_components = ensure_score_components(article)
         recency_details = calculate_recency_score_details(article)
         score_components["recency_score"] = recency_details["score"]
         final_score = (
@@ -777,28 +935,13 @@ def recalculate_final_scores(articles: List[Dict[str, Any]]) -> None:
             + score_components["cross_source_hot_score"]
             + score_components["recency_score"]
         )
-        article["final_score"] = round(final_score, 3)
-        article["scoring_debug"]["final_score"] = {
-            "_comment": SCORE_DEBUG_COMMENTS["final_score"],
-            "value": article["final_score"],
-            "components": {
-                "base_priority_score": score_components["base_priority_score"],
-                "local_extra_score": score_components["local_extra_score"],
-                "fetch_local_rank_score": score_components["fetch_local_rank_score"],
-                "history_score": score_components["history_score"],
-                "cross_source_hot_score": score_components["cross_source_hot_score"],
-                "recency_score": score_components["recency_score"],
-            },
-            "components_comment_zh": {
-                "base_priority_score": "基础分，来自 source_priority。",
-                "local_extra_score": "源内热度参考分，用于解释该条内容的站内热度信号。",
-                "fetch_local_rank_score": "同 source_type 内按排序位置得到的分值影响。",
-                "history_score": "与历史热点相似时带来的分值影响，重复时通常为负分。",
-                "cross_source_hot_score": "被多个不同 source_type 命中时的分值影响。",
-                "recency_score": "时效性带来的分值影响。",
-            },
-        }
-        article["similarity_debug"]["cross_source_hot"]["score"] = score_components["cross_source_hot_score"]
+        set_article_final_score(article, final_score)
+        set_final_score_debug(article, score_components)
+        set_cross_source_hot_debug(
+            article,
+            matched_source_type_count=int(ensure_similarity_debug(article)["cross_source_hot"].get("matched_source_type_count", 0) or 0),
+            score=score_components["cross_source_hot_score"],
+        )
 
 
 def build_output_scoring_config() -> Dict[str, Any]:
@@ -841,17 +984,14 @@ def chunked_pairs(
 
 def apply_similarity_scoring(articles: List[Dict[str, Any]], previous_titles: Iterable[str]) -> Dict[Tuple[int, int], float]:
     previous_titles = list(previous_titles)
-    for article in articles:
-        article["_similarity_features"] = build_similarity_features(article)
-
     assign_fetch_rank_scores(articles)
     apply_history_scores(articles, previous_titles)
 
     candidate_started = time.perf_counter()
     candidate_pairs = []
     for i, j in build_candidate_pairs(articles):
-        features_i = articles[i]["_similarity_features"]
-        features_j = articles[j]["_similarity_features"]
+        features_i = ensure_similarity_features(articles[i])
+        features_j = ensure_similarity_features(articles[j])
         if should_compare(features_i, features_j):
             candidate_pairs.append((i, j, features_i, features_j))
     candidate_elapsed = time.perf_counter() - candidate_started
@@ -901,12 +1041,9 @@ def apply_similarity_scoring(articles: List[Dict[str, Any]], previous_titles: It
     return pair_similarities
 
 
-def merge_cluster_metadata(canonical: Dict[str, Any], cluster_articles: List[Dict[str, Any]], cluster_id: int) -> Dict[str, Any]:
-    canonical["multi_source"] = len({a.get("source_type") for a in cluster_articles}) > 1
-    canonical["similarity_debug"]["duplicate_group"] = {
-        "merged": len(cluster_articles) > 1,
-        "cluster_size": len(cluster_articles),
-    }
+def merge_cluster_metadata(canonical: Dict[str, Any], cluster_articles: List[Dict[str, Any]]) -> Dict[str, Any]:
+    set_article_multi_source(canonical, len({a.get("source_type") for a in cluster_articles}) > 1)
+    set_duplicate_group_debug(canonical, cluster_size=len(cluster_articles))
 
     canonical_topic = resolve_article_topic(canonical)
     if canonical_topic:
@@ -914,7 +1051,7 @@ def merge_cluster_metadata(canonical: Dict[str, Any], cluster_articles: List[Dic
     else:
         merged_topic = resolve_cluster_topic(cluster_articles, default="")
         if merged_topic:
-            canonical["topic"] = merged_topic
+            set_article_topic(canonical, merged_topic)
     
     return canonical
 
@@ -923,44 +1060,46 @@ def deduplicate_articles(articles: List[Dict[str, Any]], previous_titles: Option
     if not articles:
         return articles
 
-    for article in articles:
-        article.setdefault("source_priority", normalize_priority(article.get("source_priority", article.get("priority", 3))))
-    initialize_article_scores(articles)
-    pair_similarities = apply_similarity_scoring(articles, previous_titles or [])
+    working_articles = build_working_articles(articles)
+    pair_similarities = apply_similarity_scoring(working_articles, previous_titles or [])
 
-    duplicate_union = UnionFind(len(articles))
+    duplicate_union = UnionFind(len(working_articles))
 
     for (i, j), similarity in pair_similarities.items():
         if similarity >= SCORING_CONFIG["duplicate_threshold"]:
             duplicate_union.union(i, j)
         elif (
-            articles[i]["_similarity_features"]["normalized_url"]
-            and articles[i]["_similarity_features"]["normalized_url"] == articles[j]["_similarity_features"]["normalized_url"]
+            ensure_similarity_features(working_articles[i])["normalized_url"]
+            and ensure_similarity_features(working_articles[i])["normalized_url"] == ensure_similarity_features(working_articles[j])["normalized_url"]
         ):
             duplicate_union.union(i, j)
 
     clusters: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
-    for idx, article in enumerate(articles):
+    for idx, article in enumerate(working_articles):
         clusters[duplicate_union.find(idx)].append(article)
 
     deduplicated = []
-    for cluster_id, cluster_articles in clusters.items():
+    for cluster_articles in clusters.values():
         canonical = max(
             cluster_articles,
             key=lambda item: (
                 item.get("final_score", 0),
-                item["_score_components"]["local_extra_score"],
+                ensure_score_components(item)["local_extra_score"],
                 item.get("title", ""),
             ),
         )
-        canonical = merge_cluster_metadata(canonical, cluster_articles, cluster_id)
+        canonical = merge_cluster_metadata(canonical, cluster_articles)
         deduplicated.append(canonical)
 
     for article in deduplicated:
-        article.pop("_similarity_features", None)
+        article["score_components"] = {
+            key: float(ensure_score_components(article).get(key, 0.0) or 0.0)
+            for key in SCORE_COMPONENT_KEYS
+        }
+        article.pop("_work_state", None)
 
     deduplicated.sort(key=lambda item: item.get("final_score", 0), reverse=True)
-    logging.info("Deduplication: %d → %d articles", len(articles), len(deduplicated))
+    logging.info("Deduplication: %d → %d articles", len(working_articles), len(deduplicated))
     return deduplicated
 
 
@@ -996,11 +1135,31 @@ def load_previous_hotspots(archive_dir: Path, days: int = 14) -> List[str]:
     return seen_titles
 
 
+def sanitize_article_record(article: Dict[str, Any]) -> Dict[str, Any]:
+    sanitized = article.copy()
+    sanitized.pop("_work_state", None)
+    sanitized.pop("_similarity_features", None)
+    sanitized.pop("_score_components", None)
+    return sanitized
+
+
+def build_working_articles(articles: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    working_articles: List[Dict[str, Any]] = []
+    for article in articles:
+        if not isinstance(article, dict):
+            continue
+        working_article = sanitize_article_record(article)
+        normalize_article_source_priority(working_article)
+        initialize_article_scores([working_article])
+        working_articles.append(working_article)
+    return working_articles
+
+
 def group_by_source_types(articles: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
     source_groups: Dict[str, List[Dict[str, Any]]] = {}
     for article in articles:
         source_type = str(article.get("source_type", "") or "unknown")
-        source_groups.setdefault(source_type, []).append(article.copy())
+        source_groups.setdefault(source_type, []).append(sanitize_article_record(article))
 
     for source_type, source_articles in source_groups.items():
         source_groups[source_type] = sorted(
@@ -1023,8 +1182,8 @@ def load_articles_payload(file_path: Optional[Path], source_type: str) -> Dict[s
             continue
         normalized = article.copy()
         normalized["source_type"] = str(normalized.get("source_type") or source_type)
-        normalized["source_priority"] = normalize_priority(normalized.get("source_priority", normalized.get("priority", 3)))
-        normalized["topic"] = resolve_article_topic(normalized, default="uncategorized") or "uncategorized"
+        normalize_article_source_priority(normalized)
+        set_article_topic(normalized, resolve_article_topic(normalized, default="uncategorized") or "uncategorized")
         normalized_articles.append(normalized)
 
     return {"generated": payload.get("generated"), "articles": normalized_articles}
@@ -1041,7 +1200,7 @@ def collect_articles(payloads: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]
     all_articles: List[Dict[str, Any]] = []
     for step_key in STEP_KEYS:
         all_articles.extend(
-            article.copy()
+            sanitize_article_record(article)
             for article in payloads.get(step_key, {}).get("articles", [])
             if isinstance(article, dict)
         )
@@ -1059,26 +1218,31 @@ def build_input_stats(payloads: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def serialize_article_for_output(article: Dict[str, Any]) -> Dict[str, Any]:
-    score_components = article.get("_score_components", {}) if isinstance(article.get("_score_components"), dict) else {}
+def build_processing_summary(previous_titles: List[str], total_collected: int) -> Dict[str, Any]:
+    return {
+        "deduplication_applied": True,
+        "previous_hotspots_scoring_applied": len(previous_titles) > 0,
+        "scoring_applied": True,
+        "scoring_version": "2.0",
+        "score_formula": "base_priority_score + fetch_local_rank_score + history_score + cross_source_hot_score + recency_score",
+        "scoring_config": build_output_scoring_config(),
+        "input_total_articles": total_collected,
+    }
+
+
+def project_article_output(article: Dict[str, Any]) -> Dict[str, Any]:
+    projected_source = sanitize_article_record(article)
     output = {
-        "title": article.get("title"),
-        "link": article.get("link"),
-        "date": article.get("date"),
-        "topic": article.get("topic"),
-        "source_type": article.get("source_type"),
-        "source_id": article.get("source_id"),
-        "source_name": article.get("source_name"),
-        "source_priority": article.get("source_priority"),
-        "final_score": article.get("final_score"),
-        "score_components": {
-            "base_priority_score": score_components.get("base_priority_score", 0.0),
-            "fetch_local_rank_score": score_components.get("fetch_local_rank_score", 0.0),
-            "history_score": score_components.get("history_score", 0.0),
-            "cross_source_hot_score": score_components.get("cross_source_hot_score", 0.0),
-            "recency_score": score_components.get("recency_score", 0.0),
-            "local_extra_score": score_components.get("local_extra_score", 0.0),
-        },
+        "title": projected_source.get("title"),
+        "link": projected_source.get("link"),
+        "date": projected_source.get("date"),
+        "topic": projected_source.get("topic"),
+        "source_type": projected_source.get("source_type"),
+        "source_id": projected_source.get("source_id"),
+        "source_name": projected_source.get("source_name"),
+        "source_priority": projected_source.get("source_priority"),
+        "final_score": projected_source.get("final_score"),
+        "score_components": export_score_components(article),
     }
 
     optional_fields = (
@@ -1090,13 +1254,16 @@ def serialize_article_for_output(article: Dict[str, Any]) -> Dict[str, Any]:
         "score",
         "reddit_url",
         "external_url",
+        "google_query",
+        "twitter_query",
+        "reddit_query",
         "name",
         "repo",
         "published_at",
     )
     for field in optional_fields:
-        if field in article:
-            output[field] = article.get(field)
+        if field in projected_source:
+            output[field] = projected_source.get(field)
     return output
 
 
@@ -1115,19 +1282,11 @@ def build_merged_output(
             "source_types_count": len(source_groups),
             "source_type_distribution": distribution,
         },
-        "processing": {
-            "deduplication_applied": True,
-            "previous_hotspots_scoring_applied": len(previous_titles) > 0,
-            "scoring_applied": True,
-            "scoring_version": "2.0",
-            "score_formula": "base_priority_score + fetch_local_rank_score + history_score + cross_source_hot_score + recency_score",
-            "scoring_config": build_output_scoring_config(),
-            "input_total_articles": total_collected,
-        },
+        "processing": build_processing_summary(previous_titles, total_collected),
         "source_types": {
             source_type: {
                 "count": len(items),
-                "articles": [serialize_article_for_output(article) for article in items],
+                "articles": [project_article_output(article) for article in items],
             }
             for source_type, items in source_groups.items()
         },

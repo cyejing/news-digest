@@ -46,6 +46,7 @@ class TestStepContract(unittest.TestCase):
         self.assertEqual(meta["timing_s"]["total"], 10.0)
         self.assertEqual(meta["failed_items"][0]["source_id"], "openai-twitter")
         self.assertEqual(meta["failed_items"][0]["attempt"], 2)
+        self.assertNotIn("slow_request_buckets", meta["request_timing_summary"])
         self.assertEqual(meta["slow_requests"]["total_count"], 1)
         slow_bucket = next(bucket for bucket in meta["slow_requests"]["buckets"] if bucket["count"] == 1)
         self.assertEqual(slow_bucket["items"][0]["source_id"], "openai-twitter")
@@ -69,6 +70,68 @@ class TestStepContract(unittest.TestCase):
 
             payload = json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual(sorted(payload.keys()), ["articles", "generated", "source_type"])
+
+    def test_build_step_meta_from_traces_caps_active_elapsed_by_total(self):
+        meta = step_contract.build_step_meta_from_traces(
+            step_key="rss",
+            status="ok",
+            elapsed_total_s=5.0,
+            items=3,
+            calls_total=2,
+            calls_ok=2,
+            request_traces=[
+                {"source_id": "a", "target": "a", "timing_s": {"active": 4.0, "total": 4.0}, "status": "ok"},
+                {"source_id": "b", "target": "b", "timing_s": {"active": 3.0, "total": 3.0}, "status": "ok"},
+            ],
+        )
+
+        self.assertEqual(meta["timing_s"]["active"], 5.0)
+        self.assertEqual(meta["timing_s"]["total"], 5.0)
+
+    def test_build_pipeline_call_stats_counts_all_non_ok_steps(self):
+        call_stats = step_contract.build_pipeline_call_stats(
+            [
+                {"status": "ok"},
+                {"status": "partial"},
+                {"status": "error"},
+                {"status": "skipped"},
+            ]
+        )
+
+        self.assertEqual(call_stats["kind"], "steps")
+        self.assertEqual(call_stats["total_calls"], 4)
+        self.assertEqual(call_stats["ok_calls"], 1)
+        self.assertEqual(call_stats["partial_calls"], 1)
+        self.assertEqual(call_stats["failed_calls"], 3)
+
+    def test_derive_pipeline_status_returns_partial_when_progress_exists(self):
+        self.assertEqual(
+            step_contract.derive_pipeline_status(
+                [
+                    {"status": "error"},
+                    {"status": "ok"},
+                ]
+            ),
+            "partial",
+        )
+        self.assertEqual(
+            step_contract.derive_pipeline_status(
+                [
+                    {"status": "skipped"},
+                    {"status": "error"},
+                ]
+            ),
+            "partial",
+        )
+        self.assertEqual(
+            step_contract.derive_pipeline_status(
+                [
+                    {"status": "error"},
+                    {"status": "timeout"},
+                ]
+            ),
+            "error",
+        )
 
 
 if __name__ == "__main__":

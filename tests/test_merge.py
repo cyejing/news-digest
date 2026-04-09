@@ -21,6 +21,151 @@ merge_sources = load_module()
 
 
 class TestMergeSources(unittest.TestCase):
+    def test_debug_helpers_build_stable_default_shapes(self):
+        article = {}
+
+        similarity_debug = merge_sources.ensure_similarity_debug(article)
+        scoring_debug = merge_sources.ensure_scoring_debug(article)
+
+        self.assertEqual(similarity_debug["history_similarity"], 0.0)
+        self.assertFalse(similarity_debug["history_duplicate"])
+        self.assertEqual(similarity_debug["duplicate_group"]["cluster_size"], 1)
+        self.assertEqual(similarity_debug["cross_source_hot"]["matched_source_type_count"], 0)
+        self.assertEqual(similarity_debug["cross_source_hot"]["score"], 0.0)
+        self.assertIn("final_score_formula", scoring_debug)
+
+    def test_project_article_output_uses_stable_score_component_projection(self):
+        article = {
+            "title": "OpenAI releases GPT-5",
+            "link": "https://example.com/1",
+            "topic": "ai-frontier",
+            "source_type": "rss",
+            "source_name": "RSS A",
+            "source_id": "rss-a",
+            "source_priority": 3,
+            "final_score": 8.5,
+            "score_components": {
+                "base_priority_score": 3.0,
+                "fetch_local_rank_score": 2.5,
+                "history_score": -1.0,
+                "cross_source_hot_score": 2.0,
+                "recency_score": 1.0,
+                "local_extra_score": 0.5,
+                "unused_field": 99,
+            },
+        }
+
+        projected = merge_sources.project_article_output(article)
+
+        self.assertEqual(projected["final_score"], 8.5)
+        self.assertEqual(
+            projected["score_components"],
+            {
+                "base_priority_score": 3.0,
+                "fetch_local_rank_score": 2.5,
+                "history_score": -1.0,
+                "cross_source_hot_score": 2.0,
+                "recency_score": 1.0,
+                "local_extra_score": 0.5,
+            },
+        )
+        self.assertNotIn("unused_field", projected["score_components"])
+        self.assertNotIn("_score_components", projected)
+        self.assertNotIn("_work_state", projected)
+
+    def test_sanitize_article_record_strips_internal_work_fields(self):
+        article = {
+            "title": "OpenAI releases GPT-5",
+            "_work_state": {"score_components": {}, "similarity_features": {}},
+        }
+
+        sanitized = merge_sources.sanitize_article_record(article)
+
+        self.assertEqual(sanitized["title"], "OpenAI releases GPT-5")
+        self.assertNotIn("_work_state", sanitized)
+
+    def test_build_working_articles_creates_isolated_work_records(self):
+        articles = [
+            {
+                "title": "OpenAI releases GPT-5",
+                "link": "https://example.com/1",
+                "topic": "ai-frontier",
+                "source_type": "rss",
+                "source_name": "RSS A",
+                "source_id": "rss-a",
+                "source_priority": 3,
+            }
+        ]
+
+        working_articles = merge_sources.build_working_articles(articles)
+
+        self.assertEqual(len(working_articles), 1)
+        self.assertIn("_work_state", working_articles[0])
+        self.assertIn("final_score", working_articles[0])
+        self.assertNotIn("_work_state", articles[0])
+        self.assertNotIn("final_score", articles[0])
+
+    def test_export_score_components_fills_missing_keys(self):
+        article = {
+            "score_components": {
+                "base_priority_score": 3,
+                "local_extra_score": 1,
+            },
+        }
+
+        exported = merge_sources.export_score_components(article)
+
+        self.assertEqual(exported["base_priority_score"], 3.0)
+        self.assertEqual(exported["local_extra_score"], 1.0)
+        self.assertEqual(exported["fetch_local_rank_score"], 0.0)
+        self.assertEqual(exported["history_score"], 0.0)
+        self.assertEqual(exported["cross_source_hot_score"], 0.0)
+        self.assertEqual(exported["recency_score"], 0.0)
+
+    def test_set_final_score_debug_populates_expected_component_fields(self):
+        article = {"final_score": 8.5}
+        score_components = {
+            "base_priority_score": 3.0,
+            "fetch_local_rank_score": 2.5,
+            "history_score": -1.0,
+            "cross_source_hot_score": 2.0,
+            "recency_score": 1.0,
+            "local_extra_score": 0.5,
+        }
+
+        merge_sources.set_final_score_debug(article, score_components)
+
+        self.assertEqual(article["scoring_debug"]["final_score"]["value"], 8.5)
+        self.assertEqual(
+            article["scoring_debug"]["final_score"]["components"],
+            score_components,
+        )
+
+    def test_article_field_helpers_normalize_business_fields(self):
+        article = {"priority": 9}
+
+        merge_sources.normalize_article_source_priority(article)
+        merge_sources.set_article_topic(article, " ai-frontier ")
+        merge_sources.set_article_multi_source(article, 1)
+        merge_sources.set_article_final_score(article, 8.5678)
+
+        self.assertEqual(article["source_priority"], merge_sources.normalize_priority(9))
+        self.assertEqual(article["topic"], "ai-frontier")
+        self.assertTrue(article["multi_source"])
+        self.assertEqual(article["final_score"], 8.568)
+
+    def test_ensure_similarity_features_uses_work_state(self):
+        article = {
+            "title": "OpenAI releases GPT-5",
+            "link": "https://example.com/1",
+        }
+
+        features = merge_sources.ensure_similarity_features(article)
+
+        self.assertEqual(features["normalized_title"], "openai releases gpt 5")
+        self.assertIn("_work_state", article)
+        self.assertEqual(article["_work_state"]["similarity_features"]["normalized_title"], "openai releases gpt 5")
+
     def test_deduplicate_articles_prefers_higher_score_source(self):
         articles = [
             {
@@ -47,6 +192,9 @@ class TestMergeSources(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["source_type"], "twitter")
         self.assertIn("final_score", result[0])
+        self.assertIn("score_components", result[0])
+        self.assertNotIn("_work_state", articles[0])
+        self.assertNotIn("final_score", articles[0])
 
     def test_group_by_source_types_sorts_by_final_score(self):
         grouped = merge_sources.group_by_source_types(
@@ -66,10 +214,9 @@ class TestMergeSources(unittest.TestCase):
             "topic": "ai-frontier",
             "source_type": "rss",
             "source_name": "RSS A",
-            "source_id": "rss-a",
-            "source_priority": 3,
+                "source_id": "rss-a",
+                "source_priority": 3,
         }
-        article["_similarity_features"] = merge_sources.build_similarity_features(article)
         previous_index = merge_sources.build_previous_title_index(
             [
                 "Daily AI roundup and analysis",

@@ -94,21 +94,18 @@
       "search": {
         "google_queries": [
           "\"developer tools\" OR programming OR software OR open source",
-          "cybersecurity OR cloud infrastructure OR database",
-          "smartphone OR laptop OR wearable OR gadget",
-          "网络安全 OR 消费电子"
+          "smartphone OR laptop OR wearable OR gadget OR vr",
+          "开发者 OR 消费电子"
         ],
         "twitter_queries": [
           "(\"developer tools\" OR programming OR software)",
-          "(cybersecurity OR cloud infrastructure)",
-          "(smartphone OR laptop OR wearable)",
-          "(网络安全 OR 消费电子)"
+          "(smartphone OR laptop OR wearable OR vr)",
+          "(开发者 OR 消费电子)"
         ],
         "reddit_queries": [
-          "\"developer tools\"",
-          "cybersecurity",
-          "smartphone",
-          "开发工具 developer tools"
+          "(\"developer tools\" OR programming OR software)",
+          "(smartphone OR laptop OR wearable OR vr)",
+          "(开发者 OR 消费电子)"
         ],
         "exclude": []
       },
@@ -181,12 +178,12 @@
       "search": {
         "google_queries": [
           "\"research paper\" OR preprint OR breakthrough",
-          "lab OR experiment OR discovery",
+          "laboratory OR experiment OR discovery",
           "科研 OR 论文"
         ],
         "twitter_queries": [
           "(\"research paper\" OR preprint OR breakthrough)",
-          "(lab OR experiment OR discovery)",
+          "(laboratory OR experiment OR discovery)",
           "(科研 OR 论文)"
         ],
         "reddit_queries": [
@@ -194,10 +191,7 @@
           "laboratory",
           "breakthrough"
         ],
-        "exclude": [
-          "rumor",
-          "opinion only"
-        ]
+        "exclude": []
       },
       "display": {
         "max_items": 10,

@@ -46,10 +46,10 @@ except ImportError:
     from config_loader import load_merged_runtime_config, load_merged_github_sources
 
 try:
-    from step_contract import build_request_trace, build_step_meta, configure_slow_request_thresholds, local_now, normalize_failed_item, to_local_datetime, write_result_with_meta
+    from step_contract import build_request_trace, build_step_meta_from_traces, configure_slow_request_thresholds, local_now, normalize_failed_item, to_local_datetime, write_result_with_meta
 except ImportError:
     sys.path.append(str(Path(__file__).parent))
-    from step_contract import build_request_trace, build_step_meta, configure_slow_request_thresholds, local_now, normalize_failed_item, to_local_datetime, write_result_with_meta
+    from step_contract import build_request_trace, build_step_meta_from_traces, configure_slow_request_thresholds, local_now, normalize_failed_item, to_local_datetime, write_result_with_meta
 
 TIMEOUT = 25
 MAX_RELEASES_PER_REPO = 20
@@ -543,12 +543,10 @@ def main():
             "articles": articles,
         }
         request_traces = [trace for result in results for trace in result.get("request_traces", []) if isinstance(trace, dict)]
-        effective_elapsed_s = sum(float(result.get("elapsed_s", 0) or 0) for result in results)
-        meta = build_step_meta(
+        meta = build_step_meta_from_traces(
             step_key="github",
             status="ok" if ok_count == len(results) and total_articles > 0 else ("partial" if ok_count > 0 and total_articles > 0 else "error"),
-            elapsed_active_s=effective_elapsed_s,
-            elapsed_total_s=time.monotonic() - started_at,
+            elapsed_total_s=round(time.monotonic() - started_at, 3),
             items=total_articles,
             calls_total=len(results),
             calls_ok=ok_count,

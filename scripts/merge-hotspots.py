@@ -7,20 +7,16 @@
 - 以 `topic` 为维度重建候选池
 - 执行 same-day 去重与 source_type 轮转选取
 - 生成最终归档 JSON / Markdown
-- 额外生成调试版 `debug_dir/merge-hotspots.json`
 
 执行逻辑：
 1. 读取 `merge-sources.json` 中已打分的 article
 2. 过滤当天已出现过的内容
 3. 以 topic 为单位做 source_type 轮转选取 top N
 4. 输出归档 `daily*.json`、`daily*.md`
-5. 如提供 `--debug-output`，额外输出调试版热点 JSON
 
 输出文件职责：
-- `debug_dir/merge-hotspots.json`
-  调试版热点结果，保留 `score_debug` 与 `selection_debug`
 - `archive/<DATE>/json/daily*.json`
-  最终用户交付 JSON，保持稳定 schema，不混入调试字段
+  最终用户交付 JSON，同时保留评分与选取 debug 字段
 - `archive/<DATE>/markdown/daily*.md`
   最终用户交付 Markdown
 """
@@ -54,6 +50,8 @@ SELECTION_EXPLANATIONS_ZH = {
     "source_type_total_candidates": "该 source_type 本次一共有多少候选内容",
     "selected_after_same_day_dedup": "是否在去掉今天已看过内容之后仍保留并被选中",
     "selected_by_round_robin": "是否通过 source_type 轮转选取逻辑进入最终结果",
+    "selection_order": "这条内容在 source_type 轮转选取阶段被选中的先后顺序",
+    "display_rank": "这条内容在最终 JSON / Markdown 中按热点分展示的名次",
 }
 
 
@@ -125,7 +123,12 @@ def normalize_metrics(article: Dict[str, Any]) -> Dict[str, Any]:
     return {key: value for key, value in normalized.items() if value not in (None, 0, "", [])}
 
 
-def hotspot_item(article: Dict[str, Any], rank: int) -> Dict[str, Any]:
+def build_hotspot_item(
+    article: Dict[str, Any],
+    rank: int,
+    source_rank_index: Dict[Tuple[str, str], Dict[str, int]],
+    selection_order: int,
+) -> Dict[str, Any]:
     link = article.get("link") or article.get("reddit_url") or article.get("external_url", "")
     title = (
         article.get("title")
@@ -134,7 +137,7 @@ def hotspot_item(article: Dict[str, Any], rank: int) -> Dict[str, Any]:
         or link
         or ""
     )
-    return {
+    item = {
         "rank": rank,
         "topic": article.get("topic", ""),
         "title": title,
@@ -146,18 +149,31 @@ def hotspot_item(article: Dict[str, Any], rank: int) -> Dict[str, Any]:
         "metrics": normalize_metrics(article),
         "published_at": article.get("date") or article.get("published_at"),
     }
-
-
-def score_components(article: Dict[str, Any]) -> Dict[str, float]:
-    raw = article.get("score_components", {}) if isinstance(article.get("score_components"), dict) else {}
-    return {
-        "base_priority_score": float(raw.get("base_priority_score", 0) or 0),
-        "fetch_local_rank_score": float(raw.get("fetch_local_rank_score", 0) or 0),
-        "history_score": float(raw.get("history_score", 0) or 0),
-        "cross_source_hot_score": float(raw.get("cross_source_hot_score", 0) or 0),
-        "recency_score": float(raw.get("recency_score", 0) or 0),
-        "local_extra_score": float(raw.get("local_extra_score", 0) or 0),
+    raw_score_components = article.get("score_components", {}) if isinstance(article.get("score_components"), dict) else {}
+    item["score_debug"] = {
+        "final_score": float(article.get("final_score", 0) or 0),
+        "hotspot_score": item["hotspot_score"],
+        "formula": SCORE_FORMULA,
+        "formula_zh": SCORE_FORMULA_ZH,
+        "components": {
+            "base_priority_score": float(raw_score_components.get("base_priority_score", 0) or 0),
+            "fetch_local_rank_score": float(raw_score_components.get("fetch_local_rank_score", 0) or 0),
+            "history_score": float(raw_score_components.get("history_score", 0) or 0),
+            "cross_source_hot_score": float(raw_score_components.get("cross_source_hot_score", 0) or 0),
+            "recency_score": float(raw_score_components.get("recency_score", 0) or 0),
+            "local_extra_score": float(raw_score_components.get("local_extra_score", 0) or 0),
+        },
+        "components_zh": SCORE_COMPONENTS_ZH,
     }
+    item["selection_debug"] = {
+        **source_rank_index.get(article_key(article), {"source_type_rank": 0, "source_type_total_candidates": 0}),
+        "selected_after_same_day_dedup": True,
+        "selected_by_round_robin": True,
+        "selection_order": selection_order,
+        "display_rank": rank,
+        "explanations_zh": SELECTION_EXPLANATIONS_ZH,
+    }
+    return item
 
 
 def build_source_rank_index(data: Dict[str, Any]) -> Dict[Tuple[str, str], Dict[str, int]]:
@@ -173,34 +189,18 @@ def build_source_rank_index(data: Dict[str, Any]) -> Dict[Tuple[str, str], Dict[
     return rank_index
 
 
-def build_debug_item(
-    article: Dict[str, Any],
-    rank: int,
-    source_rank_index: Dict[Tuple[str, str], Dict[str, int]],
-) -> Dict[str, Any]:
-    item = hotspot_item(article, rank)
-    components = score_components(article)
-    item["score_debug"] = {
-        "final_score": float(article.get("final_score", 0) or 0),
-        "hotspot_score": item["hotspot_score"],
-        "formula": SCORE_FORMULA,
-        "formula_zh": SCORE_FORMULA_ZH,
-        "components": components,
-        "components_zh": SCORE_COMPONENTS_ZH,
-    }
-    item["selection_debug"] = {
-        **source_rank_index.get(article_key(article), {"source_type_rank": 0, "source_type_total_candidates": 0}),
-        "selected_after_same_day_dedup": True,
-        "selected_by_round_robin": True,
-        "explanations_zh": SELECTION_EXPLANATIONS_ZH,
-    }
-    return item
-
-
 def render_metrics(metrics: Dict[str, Any]) -> str:
     ordered_keys = ["likes", "comments", "replies", "retweets", "score"]
     parts = [f"{key}={metrics[key]}" for key in ordered_keys if key in metrics]
     return ", ".join(parts)
+
+
+def render_source_label(source_type: str, source_name: str) -> str:
+    left = str(source_type or "").strip()
+    right = str(source_name or "").strip()
+    if left and right:
+        return f"{left} - {right}"
+    return left or right
 
 
 def load_seen_daily_keys(json_dir: Path) -> Tuple[Set[str], Set[str]]:
@@ -323,6 +323,24 @@ def select_topic_articles(topic_source_candidates: Dict[str, List[Dict[str, Any]
     return selected
 
 
+def build_selection_order_index(selected_articles: List[Dict[str, Any]]) -> Dict[Tuple[str, str], int]:
+    return {
+        article_key(article): index
+        for index, article in enumerate(selected_articles, start=1)
+    }
+
+
+def sort_selected_topic_articles(
+    selected_articles: List[Dict[str, Any]],
+    topic_source_candidates: Dict[str, List[Dict[str, Any]]],
+) -> List[Dict[str, Any]]:
+    source_type_order = {
+        source_type: index
+        for index, source_type in enumerate(topic_source_candidates.keys())
+    }
+    return sorted(selected_articles, key=lambda article: score_sort_key(article, source_type_order))
+
+
 def build_markdown(hotspots: Dict[str, Any], mode: str = "daily", extra_sections: str = "") -> str:
     normalized_mode = str(mode or "daily").strip().lower() or "daily"
     summary_parts = [
@@ -346,14 +364,18 @@ def build_markdown(hotspots: Dict[str, Any], mode: str = "daily", extra_sections
             hotspot_score = item.get("hotspot_score", 0)
             title = item.get("title", "")
             summary = item.get("summary", "")
+            source_type = item.get("source_type", "")
             source_name = item.get("source_name", "")
             metrics = item.get("metrics", {}) if isinstance(item.get("metrics"), dict) else {}
             title_part = f"{title} - {summary}" if summary else title
+            source_label = render_source_label(source_type, source_name)
             metrics_part = render_metrics(metrics)
             if metrics_part:
-                lines.append(f"{item.get('rank', 0)}. ⭐{hotspot_score:.1f} | {title_part} | {source_name} | {metrics_part}")
+                lines.append(
+                    f"{item.get('rank', 0)}. ⭐{hotspot_score:.1f} | {title_part} | *{source_label}* | *{metrics_part}*"
+                )
             else:
-                lines.append(f"{item.get('rank', 0)}. ⭐{hotspot_score:.1f} | {title_part} | {source_name}")
+                lines.append(f"{item.get('rank', 0)}. ⭐{hotspot_score:.1f} | {title_part} | *{source_label}*")
         lines.append("")
     if extra_sections:
         lines.append(extra_sections.strip())
@@ -366,7 +388,6 @@ def build_hotspots(
     topic_filter: Optional[str] = None,
     seen_titles: Optional[Set[str]] = None,
     seen_links: Optional[Set[str]] = None,
-    debug: bool = False,
     topic_metadata: Optional[Dict[str, Dict[str, str]]] = None,
 ) -> Dict[str, Any]:
     topic_entries: List[Dict[str, Any]] = []
@@ -377,7 +398,7 @@ def build_hotspots(
     }
     effective_seen_titles = seen_titles or set()
     effective_seen_links = seen_links or set()
-    source_rank_index = build_source_rank_index(data) if debug else {}
+    source_rank_index = build_source_rank_index(data)
     topic_candidates, available_counts, remaining_counts, ordered_topics = build_topic_candidates(
         data,
         topic_filter,
@@ -386,11 +407,19 @@ def build_hotspots(
     )
 
     for topic_id in ordered_topics:
-        limited_articles = select_topic_articles(topic_candidates.get(topic_id, {}), top_n)
-        if debug:
-            items = [build_debug_item(article, rank=index, source_rank_index=source_rank_index) for index, article in enumerate(limited_articles, start=1)]
-        else:
-            items = [hotspot_item(article, rank=index) for index, article in enumerate(limited_articles, start=1)]
+        topic_source_candidates = topic_candidates.get(topic_id, {})
+        selected_articles = select_topic_articles(topic_source_candidates, top_n)
+        selection_order_index = build_selection_order_index(selected_articles)
+        display_articles = sort_selected_topic_articles(selected_articles, topic_source_candidates)
+        items = [
+            build_hotspot_item(
+                article,
+                rank=index,
+                source_rank_index=source_rank_index,
+                selection_order=selection_order_index.get(article_key(article), index),
+            )
+            for index, article in enumerate(display_articles, start=1)
+        ]
 
         topic_entries.append(
             {
@@ -410,15 +439,13 @@ def build_hotspots(
     }
 
 
-def ensure_archive_dirs(archive_root: Path) -> Tuple[Path, Path, Path]:
+def ensure_archive_dirs(archive_root: Path) -> Tuple[Path, Path]:
     date_dir = archive_root / datetime.now().astimezone().date().isoformat()
     json_dir = date_dir / "json"
     markdown_dir = date_dir / "markdown"
-    meta_dir = date_dir / "meta"
     json_dir.mkdir(parents=True, exist_ok=True)
     markdown_dir.mkdir(parents=True, exist_ok=True)
-    meta_dir.mkdir(parents=True, exist_ok=True)
-    return date_dir, json_dir, markdown_dir
+    return json_dir, markdown_dir
 
 
 def resolve_archive_pair(json_dir: Path, markdown_dir: Path, stem: str = "daily") -> Tuple[Path, Path]:
@@ -439,7 +466,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", type=Path, default=None, help="Workspace overlay config directory")
     parser.add_argument("--input", "-i", type=Path, required=True, help="Internal pipeline JSON input")
     parser.add_argument("--archive", dest="archive", type=Path, required=True, help="Archive root dir for final hotspots outputs")
-    parser.add_argument("--debug-output", type=Path, default=None, help="Optional debug hotspots JSON path")
     parser.add_argument("--top", "-n", type=int, default=None, help="Top N articles per topic")
     parser.add_argument("--topic", "-t", type=str, default=None, help="Filter to specific topic")
     parser.add_argument("--mode", type=str, default="daily", choices=["daily", "weekly"], help="Hotspots mode label and archive file stem")
@@ -464,7 +490,7 @@ def main() -> int:
         print(f"Error: failed to read {args.input}: {exc}")
         return 1
 
-    _, json_dir, markdown_dir = ensure_archive_dirs(args.archive)
+    json_dir, markdown_dir = ensure_archive_dirs(args.archive)
     seen_titles, seen_links = load_seen_daily_keys(json_dir)
     topic_metadata = load_topic_metadata(args.defaults, args.config)
 
@@ -476,20 +502,8 @@ def main() -> int:
         seen_links=seen_links,
         topic_metadata=topic_metadata,
     )
-    debug_hotspots_json = build_hotspots(
-        data,
-        top_n=effective_top_n,
-        topic_filter=args.topic,
-        seen_titles=seen_titles,
-        seen_links=seen_links,
-        debug=True,
-        topic_metadata=topic_metadata,
-    )
     json_output, markdown_output = resolve_archive_pair(json_dir, markdown_dir, stem=args.mode)
     json_output.write_text(json.dumps(hotspots_json, ensure_ascii=False, indent=2), encoding="utf-8")
-    if args.debug_output is not None:
-        args.debug_output.parent.mkdir(parents=True, exist_ok=True)
-        args.debug_output.write_text(json.dumps(debug_hotspots_json, ensure_ascii=False, indent=2), encoding="utf-8")
     merged_archive_output = json_dir / "merge-sources.json"
     if args.input.resolve() != merged_archive_output.resolve():
         merged_archive_output.write_text(args.input.read_text(encoding="utf-8"), encoding="utf-8")

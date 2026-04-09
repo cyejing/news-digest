@@ -45,7 +45,7 @@ try:
     from config_loader import load_merged_runtime_config
     from step_contract import (
         build_request_trace,
-        build_step_meta,
+        build_step_meta_from_traces,
         configure_slow_request_thresholds,
         local_now,
         normalize_failed_item,
@@ -57,7 +57,7 @@ except ImportError:
     from config_loader import load_merged_runtime_config
     from step_contract import (
         build_request_trace,
-        build_step_meta,
+        build_step_meta_from_traces,
         configure_slow_request_thresholds,
         local_now,
         normalize_failed_item,
@@ -776,11 +776,11 @@ def main():
             "articles": articles,
         }
         request_traces = [trace for result in results for trace in result.get("request_traces", []) if isinstance(trace, dict)]
-        meta = build_step_meta(
+        step_total_elapsed_s = round(time.monotonic() - step_started_at, 3)
+        meta = build_step_meta_from_traces(
             step_key="rss",
             status="ok" if ok_count == len(results) and total_articles > 0 else ("partial" if ok_count > 0 and total_articles > 0 else "error"),
-            elapsed_active_s=sum(float(result.get("elapsed_s", 0) or 0) for result in results),
-            elapsed_total_s=time.monotonic() - step_started_at,
+            elapsed_total_s=step_total_elapsed_s,
             items=total_articles,
             calls_total=len(results),
             calls_ok=ok_count,

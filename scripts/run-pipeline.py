@@ -42,12 +42,28 @@ from typing import Any, Dict, List, Optional, Sequence
 try:
     from config_loader import load_merged_runtime_config
     from step_registry import ALL_SOURCE_STEPS, iter_fetch_steps
-    from step_contract import local_now, local_today_iso, normalize_timing
+    from step_contract import (
+        build_call_stats,
+        build_pipeline_call_stats,
+        build_step_meta,
+        derive_pipeline_status,
+        local_now,
+        local_today_iso,
+        normalize_timing,
+    )
 except ImportError:
     sys.path.append(str(Path(__file__).parent))
     from config_loader import load_merged_runtime_config
     from step_registry import ALL_SOURCE_STEPS, iter_fetch_steps
-    from step_contract import local_now, local_today_iso, normalize_timing
+    from step_contract import (
+        build_call_stats,
+        build_pipeline_call_stats,
+        build_step_meta,
+        derive_pipeline_status,
+        local_now,
+        local_today_iso,
+        normalize_timing,
+    )
 
 SCRIPTS_DIR = Path(__file__).parent
 MERGE_STEP_KEY = "merge-sources"
@@ -330,8 +346,6 @@ def build_hotspots_step_spec(
         str(debug_dir / "merge-sources.json"),
         "--archive",
         str(archive_dir),
-        "--debug-output",
-        str(debug_dir / "merge-hotspots.json"),
         "--top",
         str(top_n),
         "--mode",
@@ -420,25 +434,20 @@ def build_simple_meta(
         output_path: Optional[str] = None,
         extra: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    timing = normalize_timing(result.elapsed_s, result.elapsed_s)
-    payload: Dict[str, Any] = {
-        "step_key": step_key,
-        "status": result.status,
-        "timing_s": timing,
-        "items": items,
-        "calls_total": calls_total,
-        "calls_ok": calls_ok,
-        "failed_calls": max(0, calls_total - calls_ok),
-        "call_stats": {
-            "kind": step_key,
-            "total_calls": calls_total,
-            "ok_calls": calls_ok,
-            "failed_calls": max(0, calls_total - calls_ok),
-        },
-        "failed_items": failed_items or [],
+    payload = build_step_meta(
+        step_key=step_key,
+        status=result.status,
+        elapsed_active_s=result.elapsed_s,
+        elapsed_total_s=result.elapsed_s,
+        items=items,
+        calls_total=calls_total,
+        calls_ok=calls_ok,
+        failed_items=failed_items or [],
+    )
+    payload.update({
         "timeout_s": result.timeout_s,
         "logs": build_process_logs(result),
-    }
+    })
     if output_path:
         payload["output_path"] = output_path
     if extra:
@@ -460,12 +469,16 @@ def summarize_fetch_step(spec: StepSpec, result: ProcessResult) -> Dict[str, Any
         meta_payload.setdefault("timeout_s", result.timeout_s)
         meta_payload.setdefault("status", result.status)
         meta_payload.setdefault("output_path", str(spec.output_path) if spec.output_path else "")
-        meta_payload.setdefault("call_stats", {
-            "kind": spec.step_key,
-            "total_calls": int(meta_payload.get("calls_total", 0) or 0),
-            "ok_calls": int(meta_payload.get("calls_ok", 0) or 0),
-            "failed_calls": int(meta_payload.get("failed_calls", 0) or 0),
-        })
+        meta_payload["calls_total"] = int(meta_payload.get("calls_total", 0) or 0)
+        meta_payload["calls_ok"] = int(meta_payload.get("calls_ok", 0) or 0)
+        meta_payload["failed_calls"] = int(meta_payload.get("failed_calls", max(0, meta_payload["calls_total"] - meta_payload["calls_ok"])) or 0)
+        meta_payload["call_stats"] = build_call_stats(
+            kind=spec.step_key,
+            total_calls=meta_payload["calls_total"],
+            ok_calls=meta_payload["calls_ok"],
+            partial_calls=int((meta_payload.get("call_stats", {}) or {}).get("partial_calls", 0) if isinstance(meta_payload.get("call_stats"), dict) else 0),
+            failed_calls=meta_payload["failed_calls"],
+        )
         meta_payload["logs"] = build_process_logs(result)
         return meta_payload
 
@@ -533,10 +546,10 @@ def summarize_merge_step(spec: StepSpec, result: ProcessResult) -> Dict[str, Any
         step_key=spec.step_key,
         result=ProcessResult(**{**result.__dict__, "status": status}),
         items=items,
-        calls_total=input_items,
-        calls_ok=items,
+        calls_total=1 if payload else 0,
+        calls_ok=1 if status == "ok" and payload else 0,
         output_path=str(spec.output_path) if spec.output_path else None,
-        extra={"input_items": input_items},
+        extra={"input_items": input_items, "output_items": items},
     )
     write_json(fetch_step_meta_path(spec.output_path), meta)
     return meta
@@ -560,13 +573,7 @@ def build_pipeline_meta(
             key: value for key, value in summary.items() if key != "step_key"
         }
 
-    statuses = [summary.get("status", "error") for summary in pipeline_step_summaries.values()]
-    if outputs.get("hotspots_output"):
-        overall_status = "ok"
-    elif any(status == "ok" for status in statuses):
-        overall_status = "partial"
-    else:
-        overall_status = "error"
+    overall_status = derive_pipeline_status(pipeline_step_summaries.values())
 
     source_type_overview: Dict[str, Dict[str, Any]] = {}
     fetch_active_s = 0.0
@@ -606,12 +613,7 @@ def build_pipeline_meta(
         "fetch_active_elapsed_s": fetch_timing["active"],
         "fetch_timing_s": fetch_timing,
         "items": total_items,
-        "call_stats": {
-            "kind": "steps",
-            "total_calls": len(pipeline_step_summaries),
-            "ok_calls": sum(1 for summary in pipeline_step_summaries.values() if isinstance(summary, dict) and summary.get("status") == "ok"),
-            "failed_calls": sum(1 for summary in pipeline_step_summaries.values() if isinstance(summary, dict) and summary.get("status") in {"error", "timeout"}),
-        },
+        "call_stats": build_pipeline_call_stats(pipeline_step_summaries.values()),
         "cooldown_s": {step.step_key: runtime.get("fetch", {}).get(step.step_key, {}).get("cooldown_s", 0) for step in ALL_SOURCE_STEPS},
         "source_type_overview": source_type_overview,
         "step_summaries": pipeline_step_summaries,
