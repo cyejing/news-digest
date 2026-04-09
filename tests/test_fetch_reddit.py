@@ -5,6 +5,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).parent.parent
 SCRIPT = ROOT / "scripts" / "fetch-reddit.py"
@@ -21,6 +22,39 @@ fetch_reddit = load_module()
 
 
 class TestFetchReddit(unittest.TestCase):
+    def test_build_reddit_query_quotes_multi_word_excludes(self):
+        compiled = fetch_reddit.build_reddit_query("OpenAI launch", ["travel agent", "tutorial"])
+
+        self.assertEqual(compiled, 'OpenAI launch -"travel agent" -tutorial')
+
+    def test_fetch_topic_does_not_append_exclude_terms(self):
+        topic = {
+            "id": "ai",
+            "search": {
+                "reddit_queries": ["OpenAI"],
+                "exclude": ["tutorial", "travel agent"],
+            },
+        }
+        payload = {
+            "posts": [
+                {
+                    "data": {
+                        "title": "OpenAI launch",
+                        "permalink": "/r/openai/comments/1",
+                        "created_utc": 1775724000,
+                        "score": 10,
+                        "num_comments": 2,
+                    }
+                }
+            ]
+        }
+
+        with patch.object(fetch_reddit, "run_bb_browser_site", return_value=payload):
+            result = fetch_reddit.fetch_topic(topic, 24, fetch_reddit.logging.getLogger("test"))
+
+        self.assertEqual(result["request_traces"][0]["target"], "OpenAI")
+        self.assertEqual(result["articles"][0]["reddit_query"], "OpenAI")
+
     def test_apply_runtime_config_updates_results_per_query(self):
         original_timeout = fetch_reddit.DEFAULT_TIMEOUT
         original_results = fetch_reddit.RESULTS_PER_QUERY

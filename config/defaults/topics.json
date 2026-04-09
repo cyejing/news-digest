@@ -1,7 +1,7 @@
 {
   "_description": "Single-topic taxonomy for global tech and AI hotspots. Subtopics win over top-level categories when classification is precise.",
-  "_updated": "2026-03-30",
-  "_version": "5.0.0",
+  "_updated": "2026-04-09",
+  "_version": "5.1.0",
   "topics": [
     {
       "id": "ai-frontier",
@@ -10,22 +10,19 @@
       "description": "模型、agents、AI 应用、AI lab 发布与前沿 AI 产品化动态。",
       "search": {
         "google_queries": [
-          "foundation model release AI lab model update",
-          "LLM update AI agents copilot assistant",
-          "agentic AI application product launch",
-          "大模型 智能体 AI 应用 发布"
+          "OpenAI OR Anthropic OR ChatGPT OR Claude OR Gemini",
+          "\"AI agent\" OR copilot OR assistant OR workflow OR automation",
+          "大模型 OR 智能体"
         ],
         "twitter_queries": [
-          "\"foundation model\" launch OR release",
-          "\"AI agent\" product OR launch OR workflow",
-          "OpenAI OR Anthropic OR Google DeepMind model update",
-          "大模型 OR 智能体 发布"
+          "(OpenAI OR Anthropic OR ChatGPT OR Claude OR Gemini)",
+          "(\"AI agent\" OR copilot OR assistant OR automation)",
+          "(agentic AI OR multimodal OR reasoning)"
         ],
         "reddit_queries": [
-          "OpenAI model release",
-          "Anthropic Claude update",
-          "ChatGPT feature launch",
-          "AI agents"
+          "OpenAI",
+          "Claude",
+          "\"AI agents\""
         ],
         "exclude": [
           "tutorial",
@@ -45,22 +42,19 @@
       "description": "芯片、内存、电力、数据中心、算力、机器人、智能驾驶、Tesla、SpaceX 与太空算力。",
       "search": {
         "google_queries": [
-          "AI infrastructure GPU datacenter power memory",
-          "semiconductor compute robotics autonomous driving",
-          "Tesla Robotaxi SpaceX robotics datacenter",
-          "AI 芯片 算力 电力 机器人 智驾 SpaceX"
+          "NVIDIA OR AMD OR TSMC",
+          "datacenter OR power OR cooling",
+          "机器人 OR Tesla"
         ],
         "twitter_queries": [
-          "GPU OR datacenter OR power for AI",
-          "robotics OR humanoid robot OR autonomous driving",
-          "Tesla Robotaxi OR FSD OR Optimus",
-          "SpaceX OR satellite compute OR launch infrastructure"
+          "(NVIDIA OR AMD OR TSMC)",
+          "(datacenter OR power OR cooling)",
+          "(Tesla OR SpaceX OR robotics)"
         ],
         "reddit_queries": [
-          "NVIDIA GPU datacenter",
-          "robotics humanoid robot",
-          "Tesla FSD Robotaxi",
-          "SpaceX launch Starlink"
+          "NVIDIA",
+          "\"humanoid robot\"",
+          "\"Tesla FSD\""
         ],
         "exclude": [
           "smartphone review",
@@ -78,24 +72,6 @@
       "label": "GitHub / 开源动态",
       "description": "GitHub Releases、Trending 与关键开源仓库动态。",
       "search": {
-        "google_queries": [
-          "GitHub release open source project",
-          "GitHub trending repositories",
-          "open source developer tool release GitHub",
-          "开源项目 GitHub 更新"
-        ],
-        "twitter_queries": [
-          "\"GitHub release\" open source",
-          "\"GitHub trending\" developer tools",
-          "open source maintainer launch OR release",
-          "开源 项目 更新"
-        ],
-        "reddit_queries": [
-          "open source GitHub",
-          "GitHub release",
-          "developer tools",
-          "programming project"
-        ],
         "github_queries": [
           "llm large-language-model in:topics,name,description",
           "ai-agent autonomous-agent in:topics,name,description",
@@ -117,27 +93,24 @@
       "description": "未命中细分类的广义技术内容，包括开发工具、网络安全、平台产品、云与工程实践。",
       "search": {
         "google_queries": [
-          "developer tools software engineering platform technology",
-          "cybersecurity cloud infrastructure engineering product launch",
-          "programming framework security platform update",
-          "开发工具 网络安全 平台 软件工程 云"
+          "\"developer tools\" OR programming OR software OR open source",
+          "cybersecurity OR cloud infrastructure OR database",
+          "smartphone OR laptop OR wearable OR gadget",
+          "网络安全 OR 消费电子"
         ],
         "twitter_queries": [
-          "developer tools OR software engineering platform",
-          "cybersecurity OR security incident OR CVE",
-          "cloud infrastructure OR engineering platform update",
-          "开发工具 OR 网络安全 OR 平台 更新"
+          "(\"developer tools\" OR programming OR software)",
+          "(cybersecurity OR cloud infrastructure)",
+          "(smartphone OR laptop OR wearable)",
+          "(网络安全 OR 消费电子)"
         ],
         "reddit_queries": [
-          "software engineering",
+          "\"developer tools\"",
           "cybersecurity",
-          "cloud infrastructure",
-          "programming"
+          "smartphone",
+          "开发工具 developer tools"
         ],
-        "exclude": [
-          "rumor",
-          "unverified"
-        ]
+        "exclude": []
       },
       "display": {
         "max_items": 10,
@@ -151,22 +124,19 @@
       "description": "公司、市场、融资、并购、财报，以及宏观经济和政策对产业与资本市场的影响。",
       "search": {
         "google_queries": [
-          "business markets company earnings investment",
-          "macro economy regulation finance industry",
-          "merger acquisition startup funding stock market",
-          "商业 市场 财报 融资 宏观 监管"
+          "earnings OR revenue OR guidance",
+          "funding OR acquisition OR merger",
+          "antitrust OR regulation OR policy"
         ],
         "twitter_queries": [
-          "earnings OR guidance OR revenue company",
-          "startup funding OR acquisition OR merger",
-          "regulation OR antitrust OR industrial policy",
-          "财报 OR 融资 OR 并购 OR 监管"
+          "(earnings OR revenue OR guidance)",
+          "(funding OR acquisition OR merger)",
+          "(antitrust OR regulation OR policy)"
         ],
         "reddit_queries": [
-          "markets",
-          "business",
-          "finance",
-          "startup funding"
+          "earnings",
+          "\"startup funding\"",
+          "antitrust"
         ],
         "exclude": []
       },
@@ -182,21 +152,18 @@
       "description": "国际事务、外交、战争、制裁、地缘政治与全球供应链博弈。",
       "search": {
         "google_queries": [
-          "geopolitics diplomacy conflict sanctions",
-          "international relations war government election",
-          "global supply chain geopolitical risk",
-          "国际 外交 冲突 制裁 地缘"
+          "sanctions OR diplomacy OR ceasefire OR conflict",
+          "\"foreign policy\" OR geopolitics OR election",
+          "国际 OR 冲突"
         ],
         "twitter_queries": [
-          "geopolitics OR diplomacy OR sanctions",
-          "war OR military conflict OR ceasefire",
-          "international relations OR foreign policy",
-          "国际 外交 OR 冲突 OR 制裁"
+          "(sanctions OR diplomacy OR ceasefire OR conflict)",
+          "(\"foreign policy\" OR geopolitics OR election)",
+          "(国际 OR 冲突)"
         ],
         "reddit_queries": [
           "geopolitics",
-          "international relations",
-          "war",
+          "\"foreign policy\"",
           "sanctions"
         ],
         "exclude": []
@@ -213,22 +180,19 @@
       "description": "基础研究、论文、实验室成果与工程突破。",
       "search": {
         "google_queries": [
-          "scientific research engineering breakthrough",
-          "paper laboratory discovery applied research",
-          "science journal experiment breakthrough",
-          "科研 论文 实验室 工程 突破"
+          "\"research paper\" OR preprint OR breakthrough",
+          "lab OR experiment OR discovery",
+          "科研 OR 论文"
         ],
         "twitter_queries": [
-          "research paper OR preprint OR journal",
-          "laboratory discovery OR experiment result",
-          "engineering breakthrough OR applied research",
-          "科研 OR 论文 OR 实验室 成果"
+          "(\"research paper\" OR preprint OR breakthrough)",
+          "(lab OR experiment OR discovery)",
+          "(科研 OR 论文)"
         ],
         "reddit_queries": [
-          "research",
-          "science",
-          "paper",
-          "laboratory"
+          "\"research paper\"",
+          "laboratory",
+          "breakthrough"
         ],
         "exclude": [
           "rumor",
@@ -247,22 +211,19 @@
       "description": "教育、工作方式、媒体传播、社会文化影响与公众舆论。",
       "search": {
         "google_queries": [
-          "education future of work media society",
-          "public opinion creator economy digital culture",
-          "technology social impact jobs education",
-          "教育 工作 媒体 社会 文化 影响"
+          "\"future of work\" OR workplace OR education",
+          "\"creator economy\" OR media OR jobs",
+          "教育 OR 就业"
         ],
         "twitter_queries": [
-          "\"future of work\" OR jobs OR workplace",
-          "education OR university OR learning technology",
-          "media OR creator economy OR public opinion",
-          "教育 OR 就业 OR 媒体 OR 社会 影响"
+          "(\"future of work\" OR workplace OR education)",
+          "(\"creator economy\" OR media OR jobs)",
+          "(education OR jobs OR media)"
         ],
         "reddit_queries": [
-          "future of work",
+          "\"future of work\"",
           "education",
-          "social impact",
-          "media"
+          "\"creator economy\""
         ],
         "exclude": []
       },

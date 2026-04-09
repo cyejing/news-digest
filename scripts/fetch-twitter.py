@@ -352,7 +352,6 @@ def fetch_source(source: Dict[str, Any], cutoff: datetime) -> Dict[str, Any]:
 def fetch_topic(topic: Dict[str, Any], cutoff: datetime, logger: logging.Logger) -> Dict[str, Any]:
     search = topic.get("search", {})
     queries = search.get("twitter_queries", [])
-    exclude = search.get("exclude", [])
     per_query = result_count_for_topic(topic)
 
     dedup_by_url: Dict[str, Dict[str, Any]] = {}
@@ -361,7 +360,7 @@ def fetch_topic(topic: Dict[str, Any], cutoff: datetime, logger: logging.Logger)
     ok_queries = 0
 
     for query in queries:
-        compiled_query = build_twitter_query(query, exclude)
+        compiled_query = build_twitter_query(query, [])
         try:
             clear_last_request_elapsed()
             payload = run_bb_browser_site(["twitter/search", compiled_query, str(per_query), "latest"])

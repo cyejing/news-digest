@@ -4,8 +4,9 @@ import importlib.util
 import json
 import tempfile
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).parent.parent
 SCRIPT = ROOT / "scripts" / "fetch-twitter.py"
@@ -22,6 +23,39 @@ fetch_twitter = load_module()
 
 
 class TestFetchTwitter(unittest.TestCase):
+    def recent_created_at(self) -> str:
+        recent = fetch_twitter.local_now() - timedelta(hours=1)
+        return recent.astimezone().strftime(fetch_twitter.TWITTER_DATE_FORMAT)
+
+    def test_build_twitter_query_quotes_multi_word_excludes(self):
+        compiled = fetch_twitter.build_twitter_query("AI agents", ["travel agent", "course"])
+
+        self.assertEqual(compiled, 'AI agents -"travel agent" -course')
+
+    def test_fetch_topic_does_not_append_exclude_terms(self):
+        topic = {
+            "id": "ai",
+            "search": {
+                "twitter_queries": ["(assistant OR agents)"],
+                "exclude": ["tutorial", "travel agent"],
+            },
+        }
+        payload = {
+            "tweets": [
+                {
+                    "text": "assistant launch",
+                    "url": "https://x.com/test/status/1",
+                    "created_at": self.recent_created_at(),
+                }
+            ]
+        }
+
+        with patch.object(fetch_twitter, "run_bb_browser_site", return_value=payload):
+            result = fetch_twitter.fetch_topic(topic, fetch_twitter.local_now() - timedelta(hours=24), fetch_twitter.logging.getLogger("test"))
+
+        self.assertEqual(result["request_traces"][0]["target"], "(assistant OR agents)")
+        self.assertEqual(result["articles"][0]["twitter_query"], "(assistant OR agents)")
+
     def test_apply_runtime_config_updates_count_and_results(self):
         original_timeout = fetch_twitter.DEFAULT_TIMEOUT
         original_count = fetch_twitter.DEFAULT_COUNT
@@ -56,7 +90,7 @@ class TestFetchTwitter(unittest.TestCase):
             {
                 "text": "same as title",
                 "url": "https://x.com/test/status/1",
-                "created_at": "Thu Apr 02 10:00:00 +0000 2026",
+                "created_at": self.recent_created_at(),
             },
             "ai",
             cutoff,
@@ -75,7 +109,7 @@ class TestFetchTwitter(unittest.TestCase):
                 "text": "tweet body",
                 "summary": "tweet summary",
                 "url": "https://x.com/test/status/2",
-                "created_at": "Thu Apr 02 10:00:00 +0000 2026",
+                "created_at": self.recent_created_at(),
             },
             "ai",
             cutoff,
@@ -91,7 +125,7 @@ class TestFetchTwitter(unittest.TestCase):
             {
                 "text": "tweet body",
                 "url": "https://x.com/test/status/2",
-                "created_at": "Thu Apr 02 10:00:00 +0000 2026",
+                "created_at": self.recent_created_at(),
             },
             "ai",
             cutoff,

@@ -22,6 +22,11 @@ fetch_google = load_module()
 
 
 class TestFetchGoogle(unittest.TestCase):
+    def test_build_google_query_quotes_multi_word_excludes(self):
+        compiled = fetch_google.build_google_query("OpenAI launch", ["prompt engineering", "tutorial"])
+
+        self.assertEqual(compiled, 'OpenAI launch -"prompt engineering" -tutorial')
+
     def test_apply_runtime_config_updates_results_per_query(self):
         original_timeout = fetch_google.DEFAULT_TIMEOUT
         original_results = fetch_google.RESULTS_PER_QUERY

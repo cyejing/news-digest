@@ -30,6 +30,7 @@ FORCE=false
 SKIP_STEPS=""
 UNIT_MODULES=""
 STEP_OUTPUT_DIR="$DEBUG_DIR"
+APPENDED_FETCH_ARGS=()
 
 fetch_step_script() {
   case "$1" in
@@ -157,20 +158,20 @@ run_cmd() {
 }
 
 append_common_fetch_args() {
-  local -n cmd_ref=$1
-  local include_defaults="${2:-true}"
+  local include_defaults="${1:-true}"
+  APPENDED_FETCH_ARGS=()
   if [ "$include_defaults" = true ]; then
-    cmd_ref+=(--defaults "$DEFAULTS_DIR")
+    APPENDED_FETCH_ARGS+=(--defaults "$DEFAULTS_DIR")
   fi
   if [ -n "$CONFIG_DIR" ] && [ -d "$CONFIG_DIR" ]; then
-    cmd_ref+=(--config "$CONFIG_DIR")
+    APPENDED_FETCH_ARGS+=(--config "$CONFIG_DIR")
   fi
-  cmd_ref+=(--hours "$HOURS")
+  APPENDED_FETCH_ARGS+=(--hours "$HOURS")
   if [ "$VERBOSE" = true ]; then
-    cmd_ref+=(--verbose)
+    APPENDED_FETCH_ARGS+=(--verbose)
   fi
   if [ "$FORCE" = true ]; then
-    cmd_ref+=(--force)
+    APPENDED_FETCH_ARGS+=(--force)
   fi
 }
 
@@ -238,7 +239,8 @@ run_fetch_step() {
       fi
       ;;
     *)
-      append_common_fetch_args cmd true
+      append_common_fetch_args true
+      cmd+=("${APPENDED_FETCH_ARGS[@]}")
       ;;
   esac
   cmd+=(--output "$output_path")

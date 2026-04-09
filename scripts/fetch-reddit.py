@@ -139,6 +139,30 @@ def hours_to_reddit_time(hours: int) -> str:
     else:
         return "week"
 
+
+def normalize_text(value: str) -> str:
+    return " ".join((value or "").split())
+
+
+def format_search_term(term: str, exclude: bool = False) -> str:
+    value = normalize_text(term)
+    if not value:
+        return ""
+    if " " in value:
+        value = f"\"{value}\""
+    return f"-{value}" if exclude else value
+
+
+def build_reddit_query(base_query: str, exclude: List[str]) -> str:
+    parts = [normalize_text(base_query)]
+    parts.extend(
+        formatted
+        for formatted in (format_search_term(term, exclude=True) for term in exclude)
+        if formatted
+    )
+    return " ".join(part for part in parts if part)
+
+
 def result_count_for_topic(topic: Dict[str, Any]) -> int:
     return max(1, RESULTS_PER_QUERY)
 
@@ -326,7 +350,6 @@ def fetch_topic(topic: Dict[str, Any], hours: int, logger: logging.Logger) -> Di
     global _reddit_search_block_reason
     search = topic.get("search", {})
     queries = search.get("reddit_queries", [])
-    exclude = search.get("exclude", [])
     per_query = result_count_for_topic(topic)
     time_filter = hours_to_reddit_time(hours)
 
@@ -339,8 +362,7 @@ def fetch_topic(topic: Dict[str, Any], hours: int, logger: logging.Logger) -> Di
         if _reddit_search_block_reason:
             logger.warning("Reddit query skipped [%s]: %s", topic.get("id"), _reddit_search_block_reason)
             break
-        compiled_query = " ".join(
-            [query] + [f'-"{term}"' if " " in term else f"-{term}" for term in exclude if str(term).strip()])
+        compiled_query = build_reddit_query(query, [])
         try:
             clear_last_request_elapsed()
             payload = run_bb_browser_site(["reddit/search", compiled_query, "top", time_filter, str(per_query)])
