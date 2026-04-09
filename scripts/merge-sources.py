@@ -29,6 +29,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 import unicodedata
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -64,6 +65,19 @@ SCORING_CONFIG = {
     "recency_24h_score": 1.0,
     "recency_6h_score": 0.5,
 }
+
+SIMILARITY_LIMITS = {
+    "max_word_bucket_size": 128,
+    "max_cjk_bucket_size": 128,
+    "parallel_min_pairs": 5000,
+    "parallel_min_cpus": 4,
+    "batch_size": 512,
+}
+
+PAIR_SIMILARITY_MIN = min(
+    SCORING_CONFIG["cross_source_hot_threshold"],
+    SCORING_CONFIG["duplicate_threshold"],
+)
 
 SCORE_DEBUG_COMMENTS = {
     "scoring_debug": "评分计算说明，只保留 final_score 公式和各项分值。",
@@ -540,13 +554,77 @@ def build_previous_title_features(previous_titles: Iterable[str]) -> List[Dict[s
     ]
 
 
-def best_history_similarity(article: Dict[str, Any], previous_title_features: List[Dict[str, Any]]) -> float:
-    if not previous_title_features:
+def build_previous_title_index(previous_titles: Iterable[str]) -> Dict[str, Any]:
+    features = build_previous_title_features(previous_titles)
+    word_buckets: Dict[str, List[int]] = defaultdict(list)
+    cjk_buckets: Dict[str, List[int]] = defaultdict(list)
+    title_buckets: Dict[str, List[int]] = defaultdict(list)
+    compact_buckets: Dict[str, List[int]] = defaultdict(list)
+
+    for idx, feature in enumerate(features):
+        for token in feature["word_tokens"]:
+            word_buckets[token].append(idx)
+        for token in feature["cjk_bigrams"]:
+            cjk_buckets[token].append(idx)
+        if feature["normalized_title"]:
+            title_buckets[feature["normalized_title"]].append(idx)
+        if feature["normalized_compact"]:
+            compact_buckets[feature["normalized_compact"]].append(idx)
+
+    return {
+        "features": features,
+        "word_buckets": word_buckets,
+        "cjk_buckets": cjk_buckets,
+        "title_buckets": title_buckets,
+        "compact_buckets": compact_buckets,
+    }
+
+
+def iter_history_candidates(article_features: Dict[str, Any], previous_index: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
+    features = previous_index["features"]
+    seen: Set[int] = set()
+
+    for bucket_name, key in (
+        ("title_buckets", article_features["normalized_title"]),
+        ("compact_buckets", article_features["normalized_compact"]),
+    ):
+        if not key:
+            continue
+        for idx in previous_index[bucket_name].get(key, []):
+            if idx not in seen:
+                seen.add(idx)
+                yield features[idx]
+
+    for token in article_features["word_tokens"]:
+        bucket = previous_index["word_buckets"].get(token, [])
+        if len(bucket) > SIMILARITY_LIMITS["max_word_bucket_size"]:
+            continue
+        for idx in bucket:
+            if idx not in seen:
+                seen.add(idx)
+                yield features[idx]
+
+    for token in article_features["cjk_bigrams"]:
+        bucket = previous_index["cjk_buckets"].get(token, [])
+        if len(bucket) > SIMILARITY_LIMITS["max_cjk_bucket_size"]:
+            continue
+        for idx in bucket:
+            if idx not in seen:
+                seen.add(idx)
+                yield features[idx]
+
+
+def best_history_similarity(article: Dict[str, Any], previous_index: Dict[str, Any]) -> float:
+    if not previous_index["features"]:
         return 0.0
     article_features = article["_similarity_features"]
     best = 0.0
-    for previous in previous_title_features:
+    for previous in iter_history_candidates(article_features, previous_index):
+        if not should_compare(article_features, previous):
+            continue
         best = max(best, calculate_similarity_from_features(article_features, previous))
+        if best >= 0.96:
+            return best
     return best
 
 
@@ -558,14 +636,17 @@ def history_score_for_similarity(value: float) -> float:
 
 
 def apply_history_scores(articles: List[Dict[str, Any]], previous_titles: Iterable[str]) -> None:
-    previous_features = build_previous_title_features(previous_titles)
+    started = time.perf_counter()
+    previous_index = build_previous_title_index(previous_titles)
+    logging.info("History similarity index: %d titles", len(previous_index["features"]))
     for article in articles:
-        similarity = best_history_similarity(article, previous_features)
+        similarity = best_history_similarity(article, previous_index)
         score = history_score_for_similarity(similarity)
         article["similarity_debug"]["history_similarity"] = round(similarity, 4)
         article["_score_components"]["history_score"] = score
         if score < 0:
             article["similarity_debug"]["history_duplicate"] = True
+    logging.info("History similarity scoring finished in %.3fs", time.perf_counter() - started)
 
 
 def build_candidate_pairs(articles: List[Dict[str, Any]]) -> Iterable[Tuple[int, int]]:
@@ -589,8 +670,12 @@ def build_candidate_pairs(articles: List[Dict[str, Any]]) -> Iterable[Tuple[int,
             compact_buckets[features["normalized_compact"]].append(idx)
 
     pair_counts: Dict[Tuple[int, int], int] = defaultdict(int)
+    skipped_word_buckets = 0
     for bucket in word_buckets.values():
         if len(bucket) < 2:
+            continue
+        if len(bucket) > SIMILARITY_LIMITS["max_word_bucket_size"]:
+            skipped_word_buckets += 1
             continue
         for i in range(len(bucket)):
             for j in range(i + 1, len(bucket)):
@@ -598,13 +683,24 @@ def build_candidate_pairs(articles: List[Dict[str, Any]]) -> Iterable[Tuple[int,
                 pair_counts[pair] += 1
 
     cjk_counts: Dict[Tuple[int, int], int] = defaultdict(int)
+    skipped_cjk_buckets = 0
     for bucket in cjk_buckets.values():
         if len(bucket) < 2:
+            continue
+        if len(bucket) > SIMILARITY_LIMITS["max_cjk_bucket_size"]:
+            skipped_cjk_buckets += 1
             continue
         for i in range(len(bucket)):
             for j in range(i + 1, len(bucket)):
                 pair = (bucket[i], bucket[j])
                 cjk_counts[pair] += 1
+
+    if skipped_word_buckets or skipped_cjk_buckets:
+        logging.info(
+            "Similarity bucket guard skipped %d word buckets and %d cjk buckets",
+            skipped_word_buckets,
+            skipped_cjk_buckets,
+        )
 
     yielded: Set[Tuple[int, int]] = set()
     for pair, count in pair_counts.items():
@@ -729,37 +825,76 @@ def _compute_pair_similarity(args: Tuple[int, int, Dict[str, Any], Dict[str, Any
     return ((i, j), similarity)
 
 
+def _compute_pair_similarity_batch(
+    batch: List[Tuple[int, int, Dict[str, Any], Dict[str, Any]]]
+) -> List[Tuple[Tuple[int, int], float]]:
+    return [_compute_pair_similarity(pair) for pair in batch]
+
+
+def chunked_pairs(
+    pairs: List[Tuple[int, int, Dict[str, Any], Dict[str, Any]]],
+    size: int,
+) -> Iterable[List[Tuple[int, int, Dict[str, Any], Dict[str, Any]]]]:
+    for start in range(0, len(pairs), size):
+        yield pairs[start:start + size]
+
+
 def apply_similarity_scoring(articles: List[Dict[str, Any]], previous_titles: Iterable[str]) -> Dict[Tuple[int, int], float]:
+    previous_titles = list(previous_titles)
     for article in articles:
         article["_similarity_features"] = build_similarity_features(article)
 
     assign_fetch_rank_scores(articles)
     apply_history_scores(articles, previous_titles)
 
-    # 收集所有候选对
+    candidate_started = time.perf_counter()
     candidate_pairs = []
     for i, j in build_candidate_pairs(articles):
         features_i = articles[i]["_similarity_features"]
         features_j = articles[j]["_similarity_features"]
         if should_compare(features_i, features_j):
             candidate_pairs.append((i, j, features_i, features_j))
+    candidate_elapsed = time.perf_counter() - candidate_started
 
-    # 并行计算相似度
+    logging.info(
+        "Similarity scoring: %d articles, %d history titles, %d candidate pairs built in %.3fs",
+        len(articles),
+        len(previous_titles),
+        len(candidate_pairs),
+        candidate_elapsed,
+    )
+
+    similarity_started = time.perf_counter()
     pair_similarities: Dict[Tuple[int, int], float] = {}
-    max_workers = min(4, (os.cpu_count() or 2))
-    
-    if len(candidate_pairs) > 100:
-        # 大数据量用并行
+    cpu_count = os.cpu_count() or 2
+    max_workers = min(4, cpu_count)
+    use_parallel = (
+        len(candidate_pairs) >= SIMILARITY_LIMITS["parallel_min_pairs"]
+        and cpu_count >= SIMILARITY_LIMITS["parallel_min_cpus"]
+    )
+
+    if use_parallel:
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [executor.submit(_compute_pair_similarity, pair) for pair in candidate_pairs]
+            futures = [
+                executor.submit(_compute_pair_similarity_batch, batch)
+                for batch in chunked_pairs(candidate_pairs, SIMILARITY_LIMITS["batch_size"])
+            ]
             for future in as_completed(futures):
-                (i, j), sim = future.result()
-                pair_similarities[(i, j)] = sim
+                for (i, j), sim in future.result():
+                    if sim >= PAIR_SIMILARITY_MIN:
+                        pair_similarities[(i, j)] = sim
     else:
-        # 小数据量直接串行（避免线程开销）
         for pair in candidate_pairs:
             (i, j), sim = _compute_pair_similarity(pair)
-            pair_similarities[(i, j)] = sim
+            if sim >= PAIR_SIMILARITY_MIN:
+                pair_similarities[(i, j)] = sim
+
+    logging.info(
+        "Similarity calculation finished in %.3fs, kept %d pairs >= %.2f",
+        time.perf_counter() - similarity_started,
+        len(pair_similarities),
+        PAIR_SIMILARITY_MIN,
+    )
 
     apply_cross_source_hot_scores(articles, pair_similarities)
     recalculate_final_scores(articles)

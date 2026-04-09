@@ -59,6 +59,76 @@ class TestMergeSources(unittest.TestCase):
         self.assertEqual([item["title"] for item in grouped["rss"]], ["B", "A"])
         self.assertEqual(grouped["twitter"][0]["title"], "C")
 
+    def test_history_similarity_keeps_exact_match_with_index_pruning(self):
+        article = {
+            "title": "OpenAI releases GPT-5 for enterprise coding",
+            "link": "https://example.com/current",
+            "topic": "ai-frontier",
+            "source_type": "rss",
+            "source_name": "RSS A",
+            "source_id": "rss-a",
+            "source_priority": 3,
+        }
+        article["_similarity_features"] = merge_sources.build_similarity_features(article)
+        previous_index = merge_sources.build_previous_title_index(
+            [
+                "Daily AI roundup and analysis",
+                "OpenAI releases GPT-5 for enterprise coding",
+                "Other unrelated title",
+            ]
+        )
+
+        similarity = merge_sources.best_history_similarity(article, previous_index)
+        self.assertGreaterEqual(similarity, 0.96)
+
+    def test_deduplicate_articles_keeps_exact_duplicates_even_with_large_common_bucket(self):
+        articles = [
+            {
+                "title": "AI platform update 0",
+                "link": "https://example.com/0",
+                "topic": "ai-frontier",
+                "source_type": "rss",
+                "source_name": "RSS",
+                "source_id": "rss-0",
+                "source_priority": 3,
+            },
+            {
+                "title": "OpenAI launches agent platform",
+                "link": "https://example.com/a",
+                "topic": "ai-frontier",
+                "source_type": "rss",
+                "source_name": "RSS A",
+                "source_id": "rss-a",
+                "source_priority": 3,
+            },
+            {
+                "title": "OpenAI launches agent platform",
+                "link": "https://example.com/b",
+                "topic": "ai-frontier",
+                "source_type": "twitter",
+                "source_name": "@openai",
+                "source_id": "twitter-a",
+                "source_priority": 5,
+            },
+        ]
+        for idx in range(130):
+            articles.append(
+                {
+                    "title": f"AI platform update {idx + 1}",
+                    "link": f"https://example.com/common-{idx + 1}",
+                    "topic": "ai-frontier",
+                    "source_type": "rss",
+                    "source_name": "RSS",
+                    "source_id": f"rss-common-{idx + 1}",
+                    "source_priority": 3,
+                }
+            )
+
+        result = merge_sources.deduplicate_articles(articles)
+        matching = [item for item in result if item["title"] == "OpenAI launches agent platform"]
+        self.assertEqual(len(matching), 1)
+        self.assertEqual(matching[0]["source_type"], "twitter")
+
     def test_build_input_stats_uses_registry_order(self):
         payloads = {
             "rss": {"articles": [{}]},
