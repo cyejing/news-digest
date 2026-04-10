@@ -6,7 +6,7 @@
     {
       "id": "weibo-api",
       "name": "Weibo Hot Search",
-      "enabled": true,
+      "enabled": false,
       "topic": "social",
       "priority": 3
     },
