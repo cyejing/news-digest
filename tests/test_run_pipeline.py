@@ -345,6 +345,25 @@ class TestRunPipeline(unittest.TestCase):
             self.assertTrue(str(archived).endswith("pipeline.meta.json"))
             self.assertIn(run_pipeline.local_today_iso(), str(archived))
 
+    def test_archive_step_meta_increments_name_without_overwriting(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            meta_file = root / "pipeline.meta.json"
+            meta_file.write_text('{"run": 1}', encoding="utf-8")
+
+            first_archived = run_pipeline.archive_step_meta(meta_file, root / "archive")
+            meta_file.write_text('{"run": 2}', encoding="utf-8")
+            second_archived = run_pipeline.archive_step_meta(meta_file, root / "archive")
+            meta_file.write_text('{"run": 3}', encoding="utf-8")
+            third_archived = run_pipeline.archive_step_meta(meta_file, root / "archive")
+
+            self.assertEqual(first_archived.name, "pipeline.meta.json")
+            self.assertEqual(second_archived.name, "pipeline1.meta.json")
+            self.assertEqual(third_archived.name, "pipeline2.meta.json")
+            self.assertEqual(first_archived.read_text(encoding="utf-8"), '{"run": 1}')
+            self.assertEqual(second_archived.read_text(encoding="utf-8"), '{"run": 2}')
+            self.assertEqual(third_archived.read_text(encoding="utf-8"), '{"run": 3}')
+
 
 if __name__ == "__main__":
     unittest.main()

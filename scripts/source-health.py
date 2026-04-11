@@ -44,8 +44,8 @@ HISTORY_DAYS = 7
 DEGRADED_THRESHOLD = 0.5
 REPORT_LIMIT = 20
 ERROR_TEXT_LIMIT = 180
-META_FILE_RE = re.compile(r".*\.meta\d*\.json$")
-META_SUFFIX_RE = re.compile(r"\.meta(\d*)\.json$")
+META_FILE_RE = re.compile(r".*(?:\.meta\d*|\d+\.meta|\.meta)\.json$")
+META_SUFFIX_RE = re.compile(r"(?:(?:\.meta(\d*))|(?:(\d+)\.meta))\.json$")
 
 
 def resolve_config_dir(config_dir: Optional[Path]) -> Optional[Path]:
@@ -200,7 +200,7 @@ def parse_archive_run_label(path: Path) -> Optional[str]:
     match = META_SUFFIX_RE.search(path.name)
     if not match:
         return None
-    suffix = match.group(1)
+    suffix = match.group(1) if match.group(1) is not None else match.group(2)
     run_index = 1 if suffix == "" else int(suffix) + 1
     return f"{date_label}-{run_index}"
 

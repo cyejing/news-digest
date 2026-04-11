@@ -28,6 +28,7 @@ news-hotspots 统一编排入口。
 import argparse
 import json
 import logging
+import re
 import shutil
 import subprocess
 import sys
@@ -69,6 +70,7 @@ SCRIPTS_DIR = Path(__file__).parent
 MERGE_STEP_KEY = "merge-sources"
 HOTSPOTS_STEP_KEY = "merge-hotspots"
 PROCESS_LOG_TAIL_LINES = 100
+META_ARCHIVE_NAME_RE = re.compile(r"^(?P<base>.+?)(?P<index>\d*)\.meta\.json$")
 
 
 @dataclass(frozen=True)
@@ -264,9 +266,27 @@ def archive_step_meta(step_meta_path: Path, archive_root: Path) -> Optional[Path
         return None
     date_dir = archive_root / local_today_iso() / "meta"
     date_dir.mkdir(parents=True, exist_ok=True)
-    destination = date_dir / step_meta_path.name
+    destination = next_archive_meta_path(date_dir, step_meta_path.name)
     shutil.copy2(step_meta_path, destination)
     return destination
+
+
+def next_archive_meta_path(meta_dir: Path, file_name: str) -> Path:
+    match = META_ARCHIVE_NAME_RE.match(file_name)
+    if not match:
+        return meta_dir / file_name
+
+    base_name = match.group("base")
+    destination = meta_dir / f"{base_name}.meta.json"
+    if not destination.exists():
+        return destination
+
+    index = 1
+    while True:
+        candidate = meta_dir / f"{base_name}{index}.meta.json"
+        if not candidate.exists():
+            return candidate
+        index += 1
 
 
 def load_runtime(defaults_dir: Path, config_dir: Optional[Path]) -> Dict[str, Any]:

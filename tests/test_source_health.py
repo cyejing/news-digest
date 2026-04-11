@@ -373,7 +373,7 @@ class TestSourceHealth(unittest.TestCase):
 
     def test_parse_archive_run_label_uses_date_and_suffix_index(self):
         base = Path("/tmp/archive/2026-03-28/meta/pipeline.meta.json")
-        second = Path("/tmp/archive/2026-03-28/meta/pipeline.meta1.json")
+        second = Path("/tmp/archive/2026-03-28/meta/pipeline1.meta.json")
 
         self.assertEqual(source_health.parse_archive_run_label(base), "2026-03-28-1")
         self.assertEqual(source_health.parse_archive_run_label(second), "2026-03-28-2")
