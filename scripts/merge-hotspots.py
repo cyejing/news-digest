@@ -123,11 +123,25 @@ def normalize_metrics(article: Dict[str, Any]) -> Dict[str, Any]:
     return {key: value for key, value in normalized.items() if value not in (None, 0, "", [])}
 
 
+def build_cross_source_match_index(data: Dict[str, Any]) -> Dict[Tuple[str, str], List[Dict[str, Any]]]:
+    matches_by_key: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+
+    for source_type_data in data.get("source_types", {}).values():
+        for article in get_sorted_articles(source_type_data if isinstance(source_type_data, dict) else {}):
+            raw_matches = article.get("cross_source_matches")
+            if not isinstance(raw_matches, list) or not raw_matches:
+                continue
+            matches_by_key[article_key(article)] = [match for match in raw_matches if isinstance(match, dict)]
+
+    return matches_by_key
+
+
 def build_hotspot_item(
     article: Dict[str, Any],
     rank: int,
     source_rank_index: Dict[Tuple[str, str], Dict[str, int]],
     selection_order: int,
+    cross_source_match_index: Optional[Dict[Tuple[str, str], List[Dict[str, Any]]]] = None,
 ) -> Dict[str, Any]:
     link = article.get("link") or article.get("reddit_url") or article.get("external_url", "")
     title = (
@@ -145,6 +159,7 @@ def build_hotspot_item(
         "hotspot_score": round(article.get("final_score", 0), 1),
         "source_type": article.get("source_type", ""),
         "source_name": article.get("source_name", ""),
+        "cross_source_matches": list((cross_source_match_index or {}).get(article_key(article), [])),
         "summary": (article.get("snippet") or article.get("summary") or "").strip(),
         "metrics": normalize_metrics(article),
         "published_at": article.get("date") or article.get("published_at"),
@@ -347,8 +362,15 @@ def build_markdown(hotspots: Dict[str, Any], mode: str = "daily", extra_sections
         f"mode:{normalized_mode}",
         f"total_articles:{hotspots.get('total_articles', 0)}",
     ]
-    for source_type, count in sorted((hotspots.get("source_type_counts") or {}).items()):
-        summary_parts.append(f"{source_type}:{count}")
+    selected_source_counts = hotspots.get("source_type_counts") or {}
+    candidate_source_counts = hotspots.get("candidate_source_type_counts") or {}
+    failed_source_counts = hotspots.get("source_type_failed_counts") or {}
+    all_source_types = sorted(set(candidate_source_counts) | set(selected_source_counts) | set(failed_source_counts))
+    for source_type in all_source_types:
+        fetched_count = int(candidate_source_counts.get(source_type, 0) or 0)
+        selected_count = int(selected_source_counts.get(source_type, 0) or 0)
+        failed_count = int(failed_source_counts.get(source_type, 0) or 0)
+        summary_parts.append(f"{source_type}({fetched_count}→{selected_count},fail={failed_count})")
     summary_parts.append(f"generated_at:{hotspots.get('generated_at', '')}")
     lines: List[str] = [
         "---",
@@ -396,6 +418,7 @@ def build_hotspots(
         for source_type, source_type_data in data.get("source_types", {}).items()
         if isinstance(source_type_data, dict)
     }
+    cross_source_match_index = build_cross_source_match_index(data)
     selected_source_breakdown: Dict[str, int] = {}
     displayed_total = 0
     effective_seen_titles = seen_titles or set()
@@ -419,6 +442,7 @@ def build_hotspots(
                 rank=index,
                 source_rank_index=source_rank_index,
                 selection_order=selection_order_index.get(article_key(article), index),
+                cross_source_match_index=cross_source_match_index,
             )
             for index, article in enumerate(display_articles, start=1)
         ]
@@ -447,6 +471,28 @@ def build_hotspots(
         "candidate_source_type_counts": candidate_source_breakdown,
         "topics": topic_entries,
     }
+
+
+def load_failed_source_counts(archive_root: Path) -> Dict[str, int]:
+    date_dir = archive_root / datetime.now().astimezone().date().isoformat()
+    meta_dir = date_dir / "meta"
+    failed_counts: Dict[str, int] = {}
+    if not meta_dir.exists():
+        return failed_counts
+
+    for file_path in sorted(meta_dir.glob("*.meta.json")):
+        if file_path.name in {"pipeline.meta.json", "merge-sources.meta.json", "merge-hotspots.meta.json"}:
+            continue
+        try:
+            with open(file_path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except Exception:
+            continue
+        step_key = str(payload.get("step_key") or "").strip()
+        if not step_key:
+            continue
+        failed_counts[step_key] = int(payload.get("failed_calls", 0) or 0)
+    return failed_counts
 
 
 def ensure_archive_dirs(archive_root: Path) -> Tuple[Path, Path]:
@@ -512,6 +558,7 @@ def main() -> int:
         seen_links=seen_links,
         topic_metadata=topic_metadata,
     )
+    hotspots_json["source_type_failed_counts"] = load_failed_source_counts(args.archive)
     json_output, markdown_output = resolve_archive_pair(json_dir, markdown_dir, stem=args.mode)
     json_output.write_text(json.dumps(hotspots_json, ensure_ascii=False, indent=2), encoding="utf-8")
     merged_archive_output = json_dir / "merge-sources.json"

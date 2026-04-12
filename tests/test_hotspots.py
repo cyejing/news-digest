@@ -70,7 +70,7 @@ class TestMergeHotspots(unittest.TestCase):
                 "topics": [],
             }
         )
-        self.assertIn("---\nsummary: mode:daily | total_articles:3 | rss:2 | twitter:1 | generated_at:2026-04-02T00:00:00+00:00\n---", markdown)
+        self.assertIn("---\nsummary: mode:daily | total_articles:3 | rss(0→2,fail=0) | twitter(0→1,fail=0) | generated_at:2026-04-02T00:00:00+00:00\n---", markdown)
 
     def test_markdown_item_renders_single_line_and_omits_empty_summary(self):
         markdown = merge_hotspots.build_markdown(
@@ -171,6 +171,43 @@ class TestMergeHotspots(unittest.TestCase):
         self.assertEqual(hotspots["source_type_counts"], {"twitter": 1, "rss": 1})
         self.assertEqual(hotspots["candidate_total_articles"], 4)
         self.assertEqual(hotspots["candidate_source_type_counts"], {"rss": 3, "twitter": 1})
+
+    def test_build_hotspots_uses_precomputed_cross_source_matches(self):
+        payload = {
+            "generated": "2026-04-02T00:00:00+00:00",
+            "output_stats": {"total_articles": 1},
+            "source_types": {
+                "twitter": {
+                    "count": 1,
+                    "articles": [
+                        {
+                            "title": "OpenAI launches agent platform",
+                            "link": "https://x.com/openai/status/1",
+                            "topic": "ai-frontier",
+                            "source_type": "twitter",
+                            "source_name": "@openai",
+                            "final_score": 9.5,
+                            "cross_source_matches": [
+                                {
+                                    "source_type": "rss",
+                                    "source_name": "RSS A",
+                                    "topic": "ai-frontier",
+                                    "title": "OpenAI launches agent platform",
+                                    "link": "https://example.com/a",
+                                    "similarity": 1.0,
+                                }
+                            ],
+                        }
+                    ],
+                }
+            },
+        }
+
+        hotspots = merge_hotspots.build_hotspots(payload, top_n=1)
+        item = hotspots["topics"][0]["items"][0]
+        self.assertEqual(len(item["cross_source_matches"]), 1)
+        self.assertEqual(item["cross_source_matches"][0]["source_type"], "rss")
+        self.assertEqual(item["cross_source_matches"][0]["similarity"], 1.0)
 
     def test_topic_display_title_uses_topics_json_metadata(self):
         self.assertEqual(

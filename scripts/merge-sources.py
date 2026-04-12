@@ -201,6 +201,39 @@ def normalize_url(url: str) -> str:
         return url
 
 
+def article_primary_link(article: Dict[str, Any]) -> str:
+    return str(article.get("link") or article.get("reddit_url") or article.get("external_url") or "")
+
+
+def article_display_title(article: Dict[str, Any]) -> str:
+    return str(
+        article.get("title")
+        or article.get("name")
+        or article.get("repo")
+        or article_primary_link(article)
+        or ""
+    )
+
+
+def summarize_cross_source_match(article: Dict[str, Any], similarity: float) -> Dict[str, Any]:
+    return {
+        "source_type": str(article.get("source_type") or ""),
+        "source_name": str(article.get("source_name") or ""),
+        "topic": str(article.get("topic") or ""),
+        "title": article_display_title(article),
+        "link": article_primary_link(article),
+        "similarity": round(float(similarity or 0.0), 4),
+    }
+
+
+def cross_source_match_identity(match: Dict[str, Any]) -> Tuple[str, str, str]:
+    return (
+        str(match.get("source_type") or ""),
+        str(match.get("title") or ""),
+        str(match.get("link") or ""),
+    )
+
+
 def get_domain(url: str) -> str:
     try:
         return urlparse(url).netloc.lower().replace("www.", "")
@@ -827,6 +860,13 @@ def set_article_multi_source(article: Dict[str, Any], is_multi_source: bool) -> 
     article["multi_source"] = bool(is_multi_source)
 
 
+def set_article_cross_source_matches(article: Dict[str, Any], matches: List[Dict[str, Any]]) -> None:
+    if matches:
+        article["cross_source_matches"] = matches
+    else:
+        article.pop("cross_source_matches", None)
+
+
 def normalize_article_source_priority(article: Dict[str, Any]) -> None:
     article["source_priority"] = normalize_priority(article.get("source_priority", article.get("priority", 3)))
 
@@ -1122,6 +1162,64 @@ def apply_cross_source_hot_scores(articles: List[Dict[str, Any]], pair_similarit
             set_cross_source_hot_debug(articles[idx], matched_source_type_count=extra_types, score=score)
 
 
+def build_cross_source_matches(
+    articles: List[Dict[str, Any]],
+    pair_similarities: Dict[Tuple[int, int], float],
+) -> Dict[int, List[Dict[str, Any]]]:
+    threshold = float(SCORING_CONFIG["cross_source_hot_threshold"] or 0.0)
+    matches_by_index: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+    seen_match_keys: Dict[int, Set[Tuple[str, str, str]]] = defaultdict(set)
+
+    for (i, j), similarity in pair_similarities.items():
+        if similarity < threshold:
+            continue
+        if articles[i].get("source_type") == articles[j].get("source_type"):
+            continue
+
+        match_j = summarize_cross_source_match(articles[j], similarity)
+        match_i = summarize_cross_source_match(articles[i], similarity)
+        key_j = cross_source_match_identity(match_j)
+        key_i = cross_source_match_identity(match_i)
+
+        if key_j not in seen_match_keys[i]:
+            matches_by_index[i].append(match_j)
+            seen_match_keys[i].add(key_j)
+        if key_i not in seen_match_keys[j]:
+            matches_by_index[j].append(match_i)
+            seen_match_keys[j].add(key_i)
+
+    for idx, matches in matches_by_index.items():
+        matches_by_index[idx] = sorted(
+            matches,
+            key=lambda item: (
+                -float(item.get("similarity", 0) or 0),
+                str(item.get("source_type", "") or ""),
+                str(item.get("title", "") or ""),
+            ),
+        )
+    return matches_by_index
+
+
+def merge_cross_source_matches(cluster_indices: List[int], matches_by_index: Dict[int, List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    merged_matches: List[Dict[str, Any]] = []
+    seen: Set[Tuple[str, str, str]] = set()
+    for idx in cluster_indices:
+        for match in matches_by_index.get(idx, []):
+            identity = cross_source_match_identity(match)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            merged_matches.append(match)
+    return sorted(
+        merged_matches,
+        key=lambda item: (
+            -float(item.get("similarity", 0) or 0),
+            str(item.get("source_type", "") or ""),
+            str(item.get("title", "") or ""),
+        ),
+    )
+
+
 def recalculate_final_scores(articles: List[Dict[str, Any]]) -> None:
     for article in articles:
         score_components = ensure_score_components(article)
@@ -1274,9 +1372,24 @@ def apply_similarity_scoring(articles: List[Dict[str, Any]], previous_titles: It
     return pair_similarities
 
 
-def merge_cluster_metadata(canonical: Dict[str, Any], cluster_articles: List[Dict[str, Any]]) -> Dict[str, Any]:
+def merge_cluster_metadata(
+    canonical: Dict[str, Any],
+    cluster_articles: List[Dict[str, Any]],
+    cross_source_matches: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
     set_article_multi_source(canonical, len({a.get("source_type") for a in cluster_articles}) > 1)
     set_duplicate_group_debug(canonical, cluster_size=len(cluster_articles))
+
+    canonical_identity = (
+        str(canonical.get("source_type") or ""),
+        article_display_title(canonical),
+        article_primary_link(canonical),
+    )
+    filtered_cross_source_matches = [
+        match for match in list(cross_source_matches or [])
+        if cross_source_match_identity(match) != canonical_identity
+    ]
+    set_article_cross_source_matches(canonical, filtered_cross_source_matches)
 
     canonical_topic = resolve_article_topic(canonical)
     if canonical_topic:
@@ -1285,7 +1398,7 @@ def merge_cluster_metadata(canonical: Dict[str, Any], cluster_articles: List[Dic
         merged_topic = resolve_cluster_topic(cluster_articles, default="")
         if merged_topic:
             set_article_topic(canonical, merged_topic)
-    
+
     return canonical
 
 
@@ -1295,6 +1408,7 @@ def deduplicate_articles(articles: List[Dict[str, Any]], previous_titles: Option
 
     working_articles = build_working_articles(articles)
     pair_similarities = apply_similarity_scoring(working_articles, previous_titles or [])
+    cross_source_matches_by_index = build_cross_source_matches(working_articles, pair_similarities)
 
     duplicate_union = UnionFind(len(working_articles))
 
@@ -1307,12 +1421,13 @@ def deduplicate_articles(articles: List[Dict[str, Any]], previous_titles: Option
         ):
             duplicate_union.union(i, j)
 
-    clusters: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
-    for idx, article in enumerate(working_articles):
-        clusters[duplicate_union.find(idx)].append(article)
+    clusters: Dict[int, List[int]] = defaultdict(list)
+    for idx, _article in enumerate(working_articles):
+        clusters[duplicate_union.find(idx)].append(idx)
 
     deduplicated = []
-    for cluster_articles in clusters.values():
+    for cluster_indices in clusters.values():
+        cluster_articles = [working_articles[idx] for idx in cluster_indices]
         canonical = max(
             cluster_articles,
             key=lambda item: (
@@ -1321,7 +1436,11 @@ def deduplicate_articles(articles: List[Dict[str, Any]], previous_titles: Option
                 item.get("title", ""),
             ),
         )
-        canonical = merge_cluster_metadata(canonical, cluster_articles)
+        canonical = merge_cluster_metadata(
+            canonical,
+            cluster_articles,
+            cross_source_matches=merge_cross_source_matches(cluster_indices, cross_source_matches_by_index),
+        )
         deduplicated.append(canonical)
 
     for article in deduplicated:
@@ -1494,6 +1613,7 @@ def project_article_output(article: Dict[str, Any]) -> Dict[str, Any]:
         "name",
         "repo",
         "published_at",
+        "cross_source_matches",
     )
     for field in optional_fields:
         if field in projected_source:

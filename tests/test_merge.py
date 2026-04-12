@@ -313,6 +313,36 @@ class TestMergeSources(unittest.TestCase):
         self.assertEqual(len(matching), 1)
         self.assertEqual(matching[0]["source_type"], "twitter")
 
+    def test_deduplicate_articles_projects_cross_source_matches_from_merge_stage(self):
+        articles = [
+            {
+                "title": "OpenAI launches agent platform",
+                "link": "https://example.com/a",
+                "topic": "ai-frontier",
+                "source_type": "rss",
+                "source_name": "RSS A",
+                "source_id": "rss-a",
+                "source_priority": 3,
+            },
+            {
+                "title": "OpenAI launches agent platform",
+                "link": "https://x.com/openai/status/1",
+                "topic": "ai-frontier",
+                "source_type": "twitter",
+                "source_name": "@openai",
+                "source_id": "twitter-a",
+                "source_priority": 5,
+            },
+        ]
+
+        result = merge_sources.deduplicate_articles(articles)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["source_type"], "twitter")
+        self.assertIn("cross_source_matches", result[0])
+        self.assertEqual(len(result[0]["cross_source_matches"]), 1)
+        self.assertEqual(result[0]["cross_source_matches"][0]["source_type"], "rss")
+        self.assertEqual(result[0]["cross_source_matches"][0]["title"], "OpenAI launches agent platform")
+
     def test_build_input_stats_uses_registry_order(self):
         payloads = {
             "rss": {"articles": [{}]},
@@ -432,6 +462,7 @@ class TestMergeSources(unittest.TestCase):
             self.assertNotIn("source_names", merged_article)
             self.assertNotIn("source_name_count", merged_article)
             self.assertNotIn("display_name", merged_article)
+            self.assertIsInstance(merged_article.get("cross_source_matches", []), list)
 
 
 if __name__ == "__main__":
