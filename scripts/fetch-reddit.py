@@ -45,6 +45,7 @@ except ImportError:
 COOLDOWN_SECONDS = 6.0
 DEFAULT_TIMEOUT = 180
 RESULTS_PER_QUERY = 10
+TOPIC_QUERY_SORT = "relevance"
 _last_success_at: Optional[float] = None
 _reddit_search_block_reason: Optional[str] = None
 _last_request_elapsed_s: Optional[float] = None
@@ -365,7 +366,7 @@ def fetch_topic(topic: Dict[str, Any], hours: int, logger: logging.Logger) -> Di
         compiled_query = build_reddit_query(query, [])
         try:
             clear_last_request_elapsed()
-            payload = run_bb_browser_site(["reddit/search", compiled_query, "top", time_filter, str(per_query)])
+            payload = run_bb_browser_site(["reddit/search", compiled_query, TOPIC_QUERY_SORT, time_filter, str(per_query)])
             elapsed_s = last_request_elapsed()
             posts = extract_posts(payload)
             kept = 0

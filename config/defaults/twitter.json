@@ -34,16 +34,6 @@
       "topic": "ai-frontier"
     },
     {
-      "id": "ylecun-twitter",
-      "type": "twitter",
-      "name": "Yann LeCun (Meta AI)",
-      "handle": "ylecun",
-      "enabled": true,
-      "priority": 3,
-      "note": "Meta AI 首席科学家",
-      "topic": "social"
-    },
-    {
       "id": "mistral-twitter",
       "type": "twitter",
       "name": "Mistral AI official",
