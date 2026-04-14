@@ -686,7 +686,7 @@ def main() -> int:
 
     cleaned_archives = cleanup_archive_root(
         archive_root,
-        int(runtime.get("pipeline", {}).get("archive_retention_days", 90) or 90),
+        int(runtime.get("pipeline", {}).get("archive_retention_days", 30) or 30),
     )
     top_n = args.top if args.top is not None else int(runtime.get("pipeline", {}).get("default_hotspots_top_n", 5) or 5)
 

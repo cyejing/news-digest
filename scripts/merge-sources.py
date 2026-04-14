@@ -70,6 +70,10 @@ SCORING_CONFIG = {
 SIMILARITY_LIMITS = {
     "max_word_bucket_size": 128,
     "max_cjk_bucket_size": 128,
+    "max_history_word_bucket_size": 96,
+    "max_history_cjk_bucket_size": 96,
+    "max_history_compact_bucket_size": 96,
+    "max_history_candidates": 48,
     "parallel_min_pairs": 5000,
     "parallel_min_cpus": 4,
     "batch_size": 512,
@@ -84,7 +88,6 @@ SCORE_DEBUG_COMMENTS = {
     "scoring_debug": "评分计算说明，只保留 final_score 公式和各项分值。",
     "final_score": "merge-sources 阶段最终分，由多个分数组件相加得到。",
     "similarity_debug": "相似度与去重摘要，帮助理解历史重复、重复合并和跨来源共振。",
-    "reranking_debug": "兼容旧字段。当前 topic 内顺序直接按 final_score 降序输出，不再在 merge-sources 阶段做二次重排。",
 }
 
 SCORE_COMPONENT_KEYS = (
@@ -128,11 +131,41 @@ def resolve_article_topic(article: Dict[str, Any], default: str = "") -> str:
 
 
 def resolve_cluster_topic(cluster_articles: List[Dict[str, Any]], default: str = "") -> str:
+    topic_scores: Dict[str, float] = defaultdict(float)
+    for article in cluster_articles:
+        topic = resolve_article_topic(article)
+        if not topic:
+            continue
+        topic_scores[topic] += float(article.get("final_score", 0) or 0)
+
+    if topic_scores:
+        return max(topic_scores.items(), key=lambda item: (item[1], item[0]))[0]
+
     for article in cluster_articles:
         topic = resolve_article_topic(article)
         if topic:
             return topic
     return default
+
+
+def build_cluster_topic_candidates(cluster_articles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    topic_scores: Dict[str, float] = defaultdict(float)
+    topic_counts: Dict[str, int] = defaultdict(int)
+    for article in cluster_articles:
+        topic = resolve_article_topic(article)
+        if not topic:
+            continue
+        topic_scores[topic] += float(article.get("final_score", 0) or 0)
+        topic_counts[topic] += 1
+
+    return [
+        {
+            "topic": topic,
+            "score": round(topic_scores[topic], 3),
+            "count": int(topic_counts[topic]),
+        }
+        for topic in sorted(topic_scores, key=lambda item: (-topic_scores[item], item))
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -853,7 +886,16 @@ def set_article_final_score(article: Dict[str, Any], value: float) -> None:
 
 
 def set_article_topic(article: Dict[str, Any], topic: str) -> None:
-    article["topic"] = str(topic or "").strip()
+    normalized = str(topic or "").strip()
+    article["topic"] = normalized
+    article["primary_topic"] = normalized
+
+
+def set_article_topic_candidates(article: Dict[str, Any], candidates: List[Dict[str, Any]]) -> None:
+    if candidates:
+        article["topic_candidates"] = candidates
+    else:
+        article.pop("topic_candidates", None)
 
 
 def set_article_multi_source(article: Dict[str, Any], is_multi_source: bool) -> None:
@@ -924,6 +966,7 @@ def build_previous_title_index(previous_titles: Iterable[str]) -> Dict[str, Any]
     features = build_previous_title_features(previous_titles)
     word_buckets: Dict[str, List[int]] = defaultdict(list)
     cjk_buckets: Dict[str, List[int]] = defaultdict(list)
+    compact_bigram_buckets: Dict[str, List[int]] = defaultdict(list)
     title_buckets: Dict[str, List[int]] = defaultdict(list)
     compact_buckets: Dict[str, List[int]] = defaultdict(list)
 
@@ -932,6 +975,8 @@ def build_previous_title_index(previous_titles: Iterable[str]) -> Dict[str, Any]
             word_buckets[token].append(idx)
         for token in feature["cjk_bigrams"]:
             cjk_buckets[token].append(idx)
+        for token in feature["compact_bigrams"]:
+            compact_bigram_buckets[token].append(idx)
         if feature["normalized_title"]:
             title_buckets[feature["normalized_title"]].append(idx)
         if feature["normalized_compact"]:
@@ -941,13 +986,13 @@ def build_previous_title_index(previous_titles: Iterable[str]) -> Dict[str, Any]
         "features": features,
         "word_buckets": word_buckets,
         "cjk_buckets": cjk_buckets,
+        "compact_bigram_buckets": compact_bigram_buckets,
         "title_buckets": title_buckets,
         "compact_buckets": compact_buckets,
     }
 
 
-def iter_history_candidates(article_features: Dict[str, Any], previous_index: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
-    features = previous_index["features"]
+def iter_history_candidate_indices(article_features: Dict[str, Any], previous_index: Dict[str, Any]) -> Iterable[int]:
     seen: Set[int] = set()
 
     for bucket_name, key in (
@@ -959,33 +1004,56 @@ def iter_history_candidates(article_features: Dict[str, Any], previous_index: Di
         for idx in previous_index[bucket_name].get(key, []):
             if idx not in seen:
                 seen.add(idx)
-                yield features[idx]
+                yield idx
+
+    overlap_counts: Dict[int, int] = defaultdict(int)
 
     for token in article_features["word_tokens"]:
         bucket = previous_index["word_buckets"].get(token, [])
-        if len(bucket) > SIMILARITY_LIMITS["max_word_bucket_size"]:
+        if len(bucket) > SIMILARITY_LIMITS["max_history_word_bucket_size"]:
             continue
         for idx in bucket:
             if idx not in seen:
-                seen.add(idx)
-                yield features[idx]
+                overlap_counts[idx] += 3
 
     for token in article_features["cjk_bigrams"]:
         bucket = previous_index["cjk_buckets"].get(token, [])
-        if len(bucket) > SIMILARITY_LIMITS["max_cjk_bucket_size"]:
+        if len(bucket) > SIMILARITY_LIMITS["max_history_cjk_bucket_size"]:
             continue
         for idx in bucket:
             if idx not in seen:
-                seen.add(idx)
-                yield features[idx]
+                overlap_counts[idx] += 2
+
+    for token in article_features["compact_bigrams"]:
+        bucket = previous_index["compact_bigram_buckets"].get(token, [])
+        if len(bucket) > SIMILARITY_LIMITS["max_history_compact_bucket_size"]:
+            continue
+        for idx in bucket:
+            if idx not in seen:
+                overlap_counts[idx] += 1
+
+    ranked = sorted(overlap_counts.items(), key=lambda item: (-item[1], item[0]))
+    for idx, _score in ranked[: SIMILARITY_LIMITS["max_history_candidates"]]:
+        if idx not in seen:
+            seen.add(idx)
+            yield idx
+
 
 
 def best_history_similarity(article: Dict[str, Any], previous_index: Dict[str, Any]) -> float:
     if not previous_index["features"]:
         return 0.0
     article_features = ensure_similarity_features(article)
+
+    if article_features["normalized_title"] and previous_index["title_buckets"].get(article_features["normalized_title"]):
+        return 1.0
+    if article_features["normalized_compact"] and previous_index["compact_buckets"].get(article_features["normalized_compact"]):
+        return 1.0
+
     best = 0.0
-    for previous in iter_history_candidates(article_features, previous_index):
+    features = previous_index["features"]
+    for idx in iter_history_candidate_indices(article_features, previous_index):
+        previous = features[idx]
         if not should_compare(article_features, previous):
             continue
         best = max(best, calculate_similarity_from_features(article_features, previous))
@@ -1032,92 +1100,87 @@ def build_candidate_pairs(
     machine_profile: Optional[MachineProfile] = None,
 ) -> Iterable[Tuple[int, int]]:
     bucket_limits = similarity_bucket_limits(machine_profile or detect_machine_profile())
-    topic_buckets: Dict[str, List[int]] = defaultdict(list)
-    for idx, features in enumerate(features_list):
-        topic_buckets[str(features.get("topic") or "uncategorized")].append(idx)
     yielded: Set[Tuple[int, int]] = set()
     skipped_word_buckets = 0
     skipped_cjk_buckets = 0
 
-    for topic_indices in topic_buckets.values():
-        word_buckets: Dict[str, List[int]] = defaultdict(list)
-        cjk_buckets: Dict[str, List[int]] = defaultdict(list)
-        url_buckets: Dict[str, List[int]] = defaultdict(list)
-        title_buckets: Dict[str, List[int]] = defaultdict(list)
-        compact_buckets: Dict[str, List[int]] = defaultdict(list)
+    word_buckets: Dict[str, List[int]] = defaultdict(list)
+    cjk_buckets: Dict[str, List[int]] = defaultdict(list)
+    url_buckets: Dict[str, List[int]] = defaultdict(list)
+    title_buckets: Dict[str, List[int]] = defaultdict(list)
+    compact_buckets: Dict[str, List[int]] = defaultdict(list)
 
-        for idx in topic_indices:
-            features = features_list[idx]
-            for token in features["word_tokens"]:
-                word_buckets[token].append(idx)
-            for token in features["cjk_bigrams"]:
-                cjk_buckets[token].append(idx)
-            if features["normalized_url"]:
-                url_buckets[features["normalized_url"]].append(idx)
-            if features["normalized_title"]:
-                title_buckets[features["normalized_title"]].append(idx)
-            if features["normalized_compact"]:
-                compact_buckets[features["normalized_compact"]].append(idx)
+    for idx, features in enumerate(features_list):
+        for token in features["word_tokens"]:
+            word_buckets[token].append(idx)
+        for token in features["cjk_bigrams"]:
+            cjk_buckets[token].append(idx)
+        if features["normalized_url"]:
+            url_buckets[features["normalized_url"]].append(idx)
+        if features["normalized_title"]:
+            title_buckets[features["normalized_title"]].append(idx)
+        if features["normalized_compact"]:
+            compact_buckets[features["normalized_compact"]].append(idx)
 
-        pair_counts: Dict[Tuple[int, int], int] = defaultdict(int)
-        for bucket in word_buckets.values():
-            if len(bucket) < 2:
-                continue
-            if len(bucket) > bucket_limits["max_word_bucket_size"]:
-                skipped_word_buckets += 1
-                continue
-            for i in range(len(bucket)):
-                for j in range(i + 1, len(bucket)):
-                    pair = (bucket[i], bucket[j])
-                    pair_counts[pair] += 1
+    pair_counts: Dict[Tuple[int, int], int] = defaultdict(int)
+    for bucket in word_buckets.values():
+        if len(bucket) < 2:
+            continue
+        if len(bucket) > bucket_limits["max_word_bucket_size"]:
+            skipped_word_buckets += 1
+            continue
+        for i in range(len(bucket)):
+            for j in range(i + 1, len(bucket)):
+                pair = (bucket[i], bucket[j])
+                pair_counts[pair] += 1
 
-        cjk_counts: Dict[Tuple[int, int], int] = defaultdict(int)
-        for bucket in cjk_buckets.values():
-            if len(bucket) < 2:
-                continue
-            if len(bucket) > bucket_limits["max_cjk_bucket_size"]:
-                skipped_cjk_buckets += 1
-                continue
-            for i in range(len(bucket)):
-                for j in range(i + 1, len(bucket)):
-                    pair = (bucket[i], bucket[j])
-                    cjk_counts[pair] += 1
+    cjk_counts: Dict[Tuple[int, int], int] = defaultdict(int)
+    for bucket in cjk_buckets.values():
+        if len(bucket) < 2:
+            continue
+        if len(bucket) > bucket_limits["max_cjk_bucket_size"]:
+            skipped_cjk_buckets += 1
+            continue
+        for i in range(len(bucket)):
+            for j in range(i + 1, len(bucket)):
+                pair = (bucket[i], bucket[j])
+                cjk_counts[pair] += 1
 
-        for pair, count in pair_counts.items():
-            if count >= 2 and pair not in yielded:
-                yielded.add(pair)
-                yield pair
-        for pair, count in cjk_counts.items():
-            if count >= 3 and pair not in yielded:
-                yielded.add(pair)
-                yield pair
-        for bucket in url_buckets.values():
-            if len(bucket) < 2:
-                continue
-            for i in range(len(bucket)):
-                for j in range(i + 1, len(bucket)):
-                    pair = (bucket[i], bucket[j])
-                    if pair not in yielded:
-                        yielded.add(pair)
-                        yield pair
-        for bucket in title_buckets.values():
-            if len(bucket) < 2:
-                continue
-            for i in range(len(bucket)):
-                for j in range(i + 1, len(bucket)):
-                    pair = (bucket[i], bucket[j])
-                    if pair not in yielded:
-                        yielded.add(pair)
-                        yield pair
-        for bucket in compact_buckets.values():
-            if len(bucket) < 2:
-                continue
-            for i in range(len(bucket)):
-                for j in range(i + 1, len(bucket)):
-                    pair = (bucket[i], bucket[j])
-                    if pair not in yielded:
-                        yielded.add(pair)
-                        yield pair
+    for pair, count in pair_counts.items():
+        if count >= 2 and pair not in yielded:
+            yielded.add(pair)
+            yield pair
+    for pair, count in cjk_counts.items():
+        if count >= 3 and pair not in yielded:
+            yielded.add(pair)
+            yield pair
+    for bucket in url_buckets.values():
+        if len(bucket) < 2:
+            continue
+        for i in range(len(bucket)):
+            for j in range(i + 1, len(bucket)):
+                pair = (bucket[i], bucket[j])
+                if pair not in yielded:
+                    yielded.add(pair)
+                    yield pair
+    for bucket in title_buckets.values():
+        if len(bucket) < 2:
+            continue
+        for i in range(len(bucket)):
+            for j in range(i + 1, len(bucket)):
+                pair = (bucket[i], bucket[j])
+                if pair not in yielded:
+                    yielded.add(pair)
+                    yield pair
+    for bucket in compact_buckets.values():
+        if len(bucket) < 2:
+            continue
+        for i in range(len(bucket)):
+            for j in range(i + 1, len(bucket)):
+                pair = (bucket[i], bucket[j])
+                if pair not in yielded:
+                    yielded.add(pair)
+                    yield pair
 
     if skipped_word_buckets or skipped_cjk_buckets:
         logging.info(
@@ -1137,14 +1200,63 @@ def exact_similarity_hint(features_a: Dict[str, Any], features_b: Dict[str, Any]
     return None
 
 
-def apply_cross_source_hot_scores(articles: List[Dict[str, Any]], pair_similarities: Dict[Tuple[int, int], float]) -> None:
-    hot_union = UnionFind(len(articles))
-    for (i, j), similarity in pair_similarities.items():
-        if similarity < SCORING_CONFIG["cross_source_hot_threshold"]:
-            continue
-        if articles[i].get("source_type") == articles[j].get("source_type"):
-            continue
-        hot_union.union(i, j)
+def build_similarity_aggregation(article_count: int) -> Dict[str, Any]:
+    return {
+        "duplicate_union": UnionFind(article_count),
+        "hot_union": UnionFind(article_count),
+        "matches_by_index": defaultdict(list),
+        "seen_match_keys": defaultdict(set),
+        "kept_pairs": 0,
+    }
+
+
+def consume_similarity_pair(
+    articles: List[Dict[str, Any]],
+    features_list: Sequence[Dict[str, Any]],
+    aggregation: Dict[str, Any],
+    i: int,
+    j: int,
+    similarity: float,
+) -> None:
+    if similarity < PAIR_SIMILARITY_MIN:
+        return
+
+    aggregation["kept_pairs"] += 1
+    same_source = articles[i].get("source_type") == articles[j].get("source_type")
+    duplicate_union: UnionFind = aggregation["duplicate_union"]
+    hot_union: UnionFind = aggregation["hot_union"]
+    matches_by_index: Dict[int, List[Dict[str, Any]]] = aggregation["matches_by_index"]
+    seen_match_keys: Dict[int, Set[Tuple[str, str, str]]] = aggregation["seen_match_keys"]
+
+    same_normalized_url = (
+        bool(features_list[i].get("normalized_url"))
+        and features_list[i].get("normalized_url") == features_list[j].get("normalized_url")
+    )
+    if similarity >= SCORING_CONFIG["duplicate_threshold"] or same_normalized_url:
+        duplicate_union.union(i, j)
+
+    if similarity < SCORING_CONFIG["cross_source_hot_threshold"] or same_source:
+        return
+
+    hot_union.union(i, j)
+
+    match_j = summarize_cross_source_match(articles[j], similarity)
+    match_i = summarize_cross_source_match(articles[i], similarity)
+    key_j = cross_source_match_identity(match_j)
+    key_i = cross_source_match_identity(match_i)
+
+    if key_j not in seen_match_keys[i]:
+        matches_by_index[i].append(match_j)
+        seen_match_keys[i].add(key_j)
+    if key_i not in seen_match_keys[j]:
+        matches_by_index[j].append(match_i)
+        seen_match_keys[j].add(key_i)
+
+
+
+def finalize_similarity_aggregation(articles: List[Dict[str, Any]], aggregation: Dict[str, Any]) -> None:
+    hot_union: UnionFind = aggregation["hot_union"]
+    matches_by_index: Dict[int, List[Dict[str, Any]]] = aggregation["matches_by_index"]
 
     hot_groups: Dict[int, List[int]] = defaultdict(list)
     for idx in range(len(articles)):
@@ -1161,34 +1273,7 @@ def apply_cross_source_hot_scores(articles: List[Dict[str, Any]], pair_similarit
             ensure_score_components(articles[idx])["cross_source_hot_score"] = score
             set_cross_source_hot_debug(articles[idx], matched_source_type_count=extra_types, score=score)
 
-
-def build_cross_source_matches(
-    articles: List[Dict[str, Any]],
-    pair_similarities: Dict[Tuple[int, int], float],
-) -> Dict[int, List[Dict[str, Any]]]:
-    threshold = float(SCORING_CONFIG["cross_source_hot_threshold"] or 0.0)
-    matches_by_index: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
-    seen_match_keys: Dict[int, Set[Tuple[str, str, str]]] = defaultdict(set)
-
-    for (i, j), similarity in pair_similarities.items():
-        if similarity < threshold:
-            continue
-        if articles[i].get("source_type") == articles[j].get("source_type"):
-            continue
-
-        match_j = summarize_cross_source_match(articles[j], similarity)
-        match_i = summarize_cross_source_match(articles[i], similarity)
-        key_j = cross_source_match_identity(match_j)
-        key_i = cross_source_match_identity(match_i)
-
-        if key_j not in seen_match_keys[i]:
-            matches_by_index[i].append(match_j)
-            seen_match_keys[i].add(key_j)
-        if key_i not in seen_match_keys[j]:
-            matches_by_index[j].append(match_i)
-            seen_match_keys[j].add(key_i)
-
-    for idx, matches in matches_by_index.items():
+    for idx, matches in list(matches_by_index.items()):
         matches_by_index[idx] = sorted(
             matches,
             key=lambda item: (
@@ -1197,7 +1282,8 @@ def build_cross_source_matches(
                 str(item.get("title", "") or ""),
             ),
         )
-    return matches_by_index
+
+    aggregation.pop("seen_match_keys", None)
 
 
 def merge_cross_source_matches(cluster_indices: List[int], matches_by_index: Dict[int, List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
@@ -1301,7 +1387,7 @@ def batched(
         yield batch
 
 
-def apply_similarity_scoring(articles: List[Dict[str, Any]], previous_titles: Iterable[str]) -> Dict[Tuple[int, int], float]:
+def apply_similarity_scoring(articles: List[Dict[str, Any]], previous_titles: Iterable[str]) -> Dict[str, Any]:
     previous_titles = list(previous_titles)
     assign_fetch_rank_scores(articles)
     apply_history_scores(articles, previous_titles)
@@ -1310,7 +1396,7 @@ def apply_similarity_scoring(articles: List[Dict[str, Any]], previous_titles: It
     parallel_eligible = machine_profile.max_workers > 1 and machine_profile.cpu_count >= SIMILARITY_LIMITS["parallel_min_cpus"]
 
     candidate_started = time.perf_counter()
-    pair_similarities: Dict[Tuple[int, int], float] = {}
+    aggregation = build_similarity_aggregation(len(articles))
     if parallel_eligible:
         tasks = list(iter_similarity_tasks(features_list, machine_profile=machine_profile))
         candidate_elapsed = time.perf_counter() - candidate_started
@@ -1340,14 +1426,13 @@ def apply_similarity_scoring(articles: List[Dict[str, Any]], previous_titles: It
             ]
             for future in as_completed(futures):
                 for (i, j), sim in future.result():
-                    pair_similarities[(i, j)] = sim
+                    consume_similarity_pair(articles, features_list, aggregation, i, j, sim)
     else:
         candidate_count = 0
         for pair in iter_similarity_tasks(features_list, machine_profile=machine_profile):
             candidate_count += 1
             (i, j), sim = _compute_pair_similarity(pair)
-            if sim >= PAIR_SIMILARITY_MIN:
-                pair_similarities[(i, j)] = sim
+            consume_similarity_pair(articles, features_list, aggregation, i, j, sim)
         candidate_elapsed = time.perf_counter() - candidate_started
         logging.info(
             "Similarity scoring: %d articles, %d history titles, %d candidate pairs built in %.3fs (cpu=%d, mem=%.2fGB, workers=%d, mode=streaming)",
@@ -1360,16 +1445,16 @@ def apply_similarity_scoring(articles: List[Dict[str, Any]], previous_titles: It
             machine_profile.max_workers,
         )
 
+    finalize_similarity_aggregation(articles, aggregation)
     logging.info(
         "Similarity calculation finished in %.3fs, kept %d pairs >= %.2f",
         time.perf_counter() - similarity_started,
-        len(pair_similarities),
+        int(aggregation.get("kept_pairs", 0) or 0),
         PAIR_SIMILARITY_MIN,
     )
 
-    apply_cross_source_hot_scores(articles, pair_similarities)
     recalculate_final_scores(articles)
-    return pair_similarities
+    return aggregation
 
 
 def merge_cluster_metadata(
@@ -1391,35 +1476,56 @@ def merge_cluster_metadata(
     ]
     set_article_cross_source_matches(canonical, filtered_cross_source_matches)
 
-    canonical_topic = resolve_article_topic(canonical)
-    if canonical_topic:
-        pass
-    else:
-        merged_topic = resolve_cluster_topic(cluster_articles, default="")
-        if merged_topic:
-            set_article_topic(canonical, merged_topic)
+    merged_topic = resolve_cluster_topic(cluster_articles, default=resolve_article_topic(canonical, default=""))
+    if merged_topic:
+        set_article_topic(canonical, merged_topic)
+    set_article_topic_candidates(canonical, build_cluster_topic_candidates(cluster_articles))
 
     return canonical
 
 
-def deduplicate_articles(articles: List[Dict[str, Any]], previous_titles: Optional[Iterable[str]] = None) -> List[Dict[str, Any]]:
+def filter_historical_exact_duplicates(
+    articles: List[Dict[str, Any]],
+    previous_hotspots: Optional[Dict[str, List[str]]] = None,
+) -> Tuple[List[Dict[str, Any]], int]:
+    previous_title_keys = {
+        normalize_title(title)
+        for title in ((previous_hotspots or {}).get("titles") or [])
+        if str(title or "").strip()
+    }
+    previous_link_keys = {
+        normalize_url(link)
+        for link in ((previous_hotspots or {}).get("links") or [])
+        if str(link or "").strip()
+    }
+    if not previous_title_keys and not previous_link_keys:
+        return articles, 0
+
+    kept: List[Dict[str, Any]] = []
+    removed = 0
+    for article in articles:
+        title_key = normalize_title(article_display_title(article))
+        link_key = normalize_url(article_primary_link(article))
+        if (title_key and title_key in previous_title_keys) or (link_key and link_key in previous_link_keys):
+            removed += 1
+            continue
+        kept.append(article)
+    return kept, removed
+
+
+def deduplicate_articles(articles: List[Dict[str, Any]], previous_hotspots: Optional[Dict[str, List[str]]] = None) -> List[Dict[str, Any]]:
     if not articles:
         return articles
 
-    working_articles = build_working_articles(articles)
-    pair_similarities = apply_similarity_scoring(working_articles, previous_titles or [])
-    cross_source_matches_by_index = build_cross_source_matches(working_articles, pair_similarities)
+    exact_filtered_articles, historical_exact_removed = filter_historical_exact_duplicates(articles, previous_hotspots)
+    if historical_exact_removed:
+        logging.info("Historical exact dedup removed %d articles before similarity stage", historical_exact_removed)
 
-    duplicate_union = UnionFind(len(working_articles))
-
-    for (i, j), similarity in pair_similarities.items():
-        if similarity >= SCORING_CONFIG["duplicate_threshold"]:
-            duplicate_union.union(i, j)
-        elif (
-            ensure_similarity_features(working_articles[i])["normalized_url"]
-            and ensure_similarity_features(working_articles[i])["normalized_url"] == ensure_similarity_features(working_articles[j])["normalized_url"]
-        ):
-            duplicate_union.union(i, j)
+    previous_titles = ((previous_hotspots or {}).get("titles") or [])
+    working_articles = build_working_articles(exact_filtered_articles)
+    similarity_aggregation = apply_similarity_scoring(working_articles, previous_titles)
+    cross_source_matches_by_index = similarity_aggregation.get("matches_by_index", {})
+    duplicate_union: UnionFind = similarity_aggregation["duplicate_union"]
 
     clusters: Dict[int, List[int]] = defaultdict(list)
     for idx, _article in enumerate(working_articles):
@@ -1455,12 +1561,12 @@ def deduplicate_articles(articles: List[Dict[str, Any]], previous_titles: Option
     return deduplicated
 
 
-def load_previous_hotspots(archive_dir: Path, days: int = 14) -> List[str]:
+def load_previous_hotspots(archive_dir: Path) -> Dict[str, List[str]]:
     if not archive_dir.exists():
-        return []
+        return {"titles": [], "links": []}
 
     seen_titles: List[str] = []
-    cutoff_date = (local_now() - timedelta(days=days)).date()
+    seen_links: List[str] = []
     try:
         for file_path in sorted(archive_dir.rglob("daily*.json")):
             if file_path.parent.name != "json":
@@ -1469,7 +1575,7 @@ def load_previous_hotspots(archive_dir: Path, days: int = 14) -> List[str]:
             if match:
                 try:
                     file_date = datetime.strptime(match.group(1), "%Y-%m-%d").date()
-                    if file_date < cutoff_date:
+                    if file_date >= local_now().date():
                         continue
                 except ValueError:
                     continue
@@ -1478,13 +1584,21 @@ def load_previous_hotspots(archive_dir: Path, days: int = 14) -> List[str]:
             for topic in data.get("topics", []):
                 for item in topic.get("items", []):
                     title = str(item.get("title", "")).strip()
+                    link = str(item.get("link", "")).strip()
                     if title:
                         seen_titles.append(title)
+                    if link:
+                        seen_links.append(link)
     except Exception as exc:
         logging.debug("Failed to load previous hotspots: %s", exc)
 
-    logging.info("Loaded %d titles from previous %d days under %s", len(seen_titles), days, archive_dir)
-    return seen_titles
+    logging.info(
+        "Loaded %d titles and %d links from previous archive under %s",
+        len(seen_titles),
+        len(seen_links),
+        archive_dir,
+    )
+    return {"titles": seen_titles, "links": seen_links}
 
 
 def sanitize_article_record(article: Dict[str, Any]) -> Dict[str, Any]:
@@ -1570,11 +1684,14 @@ def build_input_stats(payloads: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def build_processing_summary(previous_titles: List[str], total_collected: int) -> Dict[str, Any]:
+def build_processing_summary(previous_hotspots: Dict[str, List[str]], total_collected: int) -> Dict[str, Any]:
+    previous_titles = previous_hotspots.get("titles") or []
+    previous_links = previous_hotspots.get("links") or []
     return {
         "deduplication_applied": True,
         "noise_filter_applied": True,
         "previous_hotspots_scoring_applied": len(previous_titles) > 0,
+        "previous_hotspots_exact_link_index_applied": len(previous_links) > 0,
         "scoring_applied": True,
         "scoring_version": "2.0",
         "score_formula": "base_priority_score + fetch_local_rank_score + history_score + cross_source_hot_score + recency_score",
@@ -1589,7 +1706,7 @@ def project_article_output(article: Dict[str, Any]) -> Dict[str, Any]:
         "title": projected_source.get("title"),
         "link": projected_source.get("link"),
         "date": projected_source.get("date"),
-        "topic": projected_source.get("topic"),
+        "primary_topic": projected_source.get("primary_topic") or projected_source.get("topic"),
         "source_type": projected_source.get("source_type"),
         "source_id": projected_source.get("source_id"),
         "source_name": projected_source.get("source_name"),
@@ -1614,6 +1731,7 @@ def project_article_output(article: Dict[str, Any]) -> Dict[str, Any]:
         "repo",
         "published_at",
         "cross_source_matches",
+        "topic_candidates",
     )
     for field in optional_fields:
         if field in projected_source:
@@ -1624,7 +1742,7 @@ def project_article_output(article: Dict[str, Any]) -> Dict[str, Any]:
 def build_merged_output(
     payloads: Dict[str, Dict[str, Any]],
     source_groups: Dict[str, List[Dict[str, Any]]],
-    previous_titles: List[str],
+    previous_hotspots: Dict[str, List[str]],
     total_collected: int,
     noise_report: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
@@ -1638,7 +1756,7 @@ def build_merged_output(
             "source_type_distribution": distribution,
         },
         "processing": {
-            **build_processing_summary(previous_titles, total_collected),
+            **build_processing_summary(previous_hotspots, total_collected),
             **(noise_report or {}),
         },
         "source_types": {
@@ -1676,14 +1794,14 @@ def main() -> int:
         payloads = load_input_payloads(args)
         total_collected = sum(len(payload.get("articles", [])) for payload in payloads.values())
         logger.info("Loaded %d standardized articles", total_collected)
-        previous_titles: List[str] = load_previous_hotspots(args.archive_dir) if args.archive_dir else []
+        previous_hotspots: Dict[str, List[str]] = load_previous_hotspots(args.archive_dir) if args.archive_dir else {"titles": [], "links": []}
         collected_articles = collect_articles(payloads)
         filtered_articles, noise_report = filter_noise_articles(collected_articles)
         if noise_report.get("filtered_noise_articles", 0):
             logger.info("Noise filter removed %d low-signal promotional articles", noise_report["filtered_noise_articles"])
-        deduplicated_articles = deduplicate_articles(filtered_articles, previous_titles)
+        deduplicated_articles = deduplicate_articles(filtered_articles, previous_hotspots)
         source_groups = group_by_source_types(deduplicated_articles)
-        output = build_merged_output(payloads, source_groups, previous_titles, total_collected, noise_report=noise_report)
+        output = build_merged_output(payloads, source_groups, previous_hotspots, total_collected, noise_report=noise_report)
 
         with open(args.output, "w", encoding="utf-8") as handle:
             json.dump(output, handle, ensure_ascii=False, indent=2)

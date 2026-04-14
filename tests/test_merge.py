@@ -250,14 +250,14 @@ class TestMergeSources(unittest.TestCase):
 
         self.assertFalse(merge_sources.is_likely_promotional_noise(article))
 
-    def test_build_candidate_pairs_stays_within_topic(self):
+    def test_build_candidate_pairs_can_cross_topics(self):
         articles = [
             {"title": "OpenAI releases GPT-5", "link": "https://a.com/1", "topic": "ai-frontier"},
             {"title": "OpenAI releases GPT-5", "link": "https://b.com/2", "topic": "business"},
         ]
         features = [merge_sources.build_similarity_features(article) for article in articles]
 
-        self.assertEqual(list(merge_sources.build_candidate_pairs(features)), [])
+        self.assertEqual(list(merge_sources.build_candidate_pairs(features)), [(0, 1)])
 
     def test_similarity_bucket_limits_shrink_on_small_machine(self):
         profile = merge_sources.MachineProfile(cpu_count=2, memory_gb=4.0, max_workers=1, batch_size=128)

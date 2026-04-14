@@ -31,14 +31,14 @@ class TestMergeHotspots(unittest.TestCase):
                 "rss": {
                     "count": 2,
                     "articles": [
-                        {"title": "A", "link": "https://example.com/a", "topic": "ai-frontier", "source_type": "rss", "source_name": "RSS", "final_score": 3},
-                        {"title": "B", "link": "https://example.com/b", "topic": "ai-infra", "source_type": "rss", "source_name": "RSS", "final_score": 2},
+                        {"title": "A", "link": "https://example.com/a", "primary_topic": "ai-frontier", "source_type": "rss", "source_name": "RSS", "final_score": 3},
+                        {"title": "B", "link": "https://example.com/b", "primary_topic": "ai-infra", "source_type": "rss", "source_name": "RSS", "final_score": 2},
                     ],
                 },
                 "twitter": {
                     "count": 1,
                     "articles": [
-                        {"title": "C", "link": "https://x.com/c", "topic": "ai-frontier", "source_type": "twitter", "source_name": "@c", "final_score": 4},
+                        {"title": "C", "link": "https://x.com/c", "primary_topic": "ai-frontier", "source_type": "twitter", "source_name": "@c", "final_score": 4},
                     ],
                 },
             },

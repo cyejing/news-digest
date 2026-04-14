@@ -4,7 +4,7 @@
     "merge_timeout_s": 300,
     "hotspots_timeout_s": 120,
     "default_hotspots_top_n": 5,
-    "archive_retention_days": 90
+    "archive_retention_days": 30
   },
   "fetch": {
     "rss": {

@@ -4,14 +4,14 @@
 
 职责：
 - 读取 `merge-sources.json`
-- 以 `topic` 为维度重建候选池
+- 以 `primary_topic` 为维度重建候选池
 - 执行 same-day 去重与 source_type 轮转选取
 - 生成最终归档 JSON / Markdown
 
 执行逻辑：
 1. 读取 `merge-sources.json` 中已打分的 article
 2. 过滤当天已出现过的内容
-3. 以 topic 为单位做 source_type 轮转选取 top N
+3. 以 primary_topic 为单位做 source_type 轮转选取 top N
 4. 输出归档 `daily*.json`、`daily*.md`
 
 输出文件职责：
@@ -48,7 +48,7 @@ SCORE_COMPONENTS_ZH = {
 SELECTION_EXPLANATIONS_ZH = {
     "source_type_rank": "这条内容在所属 source_type 候选列表中的排名",
     "source_type_total_candidates": "该 source_type 本次一共有多少候选内容",
-    "selected_after_same_day_dedup": "是否在去掉今天已看过内容之后仍保留并被选中",
+    "selected_after_same_day_dedup": "是否在去掉当天已发过内容之后仍保留并被选中",
     "selected_by_round_robin": "是否通过 source_type 轮转选取逻辑进入最终结果",
     "selection_order": "这条内容在 source_type 轮转选取阶段被选中的先后顺序",
     "display_rank": "这条内容在最终 JSON / Markdown 中按热点分展示的名次",
@@ -123,25 +123,11 @@ def normalize_metrics(article: Dict[str, Any]) -> Dict[str, Any]:
     return {key: value for key, value in normalized.items() if value not in (None, 0, "", [])}
 
 
-def build_cross_source_match_index(data: Dict[str, Any]) -> Dict[Tuple[str, str], List[Dict[str, Any]]]:
-    matches_by_key: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
-
-    for source_type_data in data.get("source_types", {}).values():
-        for article in get_sorted_articles(source_type_data if isinstance(source_type_data, dict) else {}):
-            raw_matches = article.get("cross_source_matches")
-            if not isinstance(raw_matches, list) or not raw_matches:
-                continue
-            matches_by_key[article_key(article)] = [match for match in raw_matches if isinstance(match, dict)]
-
-    return matches_by_key
-
-
 def build_hotspot_item(
     article: Dict[str, Any],
     rank: int,
     source_rank_index: Dict[Tuple[str, str], Dict[str, int]],
     selection_order: int,
-    cross_source_match_index: Optional[Dict[Tuple[str, str], List[Dict[str, Any]]]] = None,
 ) -> Dict[str, Any]:
     link = article.get("link") or article.get("reddit_url") or article.get("external_url", "")
     title = (
@@ -153,13 +139,13 @@ def build_hotspot_item(
     )
     item = {
         "rank": rank,
-        "topic": article.get("topic", ""),
+        "topic": article.get("primary_topic") or "uncategorized",
         "title": title,
         "link": link,
         "hotspot_score": round(article.get("final_score", 0), 1),
         "source_type": article.get("source_type", ""),
         "source_name": article.get("source_name", ""),
-        "cross_source_matches": list((cross_source_match_index or {}).get(article_key(article), [])),
+        "cross_source_matches": [match for match in article.get("cross_source_matches", []) if isinstance(match, dict)],
         "summary": (article.get("snippet") or article.get("summary") or "").strip(),
         "metrics": normalize_metrics(article),
         "published_at": article.get("date") or article.get("published_at"),
@@ -278,7 +264,7 @@ def build_topic_candidates(
     for source_type, source_type_data in source_types.items():
         sorted_articles = get_sorted_articles(source_type_data)
         for article in sorted_articles:
-            topic_id = str(article.get("topic") or "uncategorized")
+            topic_id = str(article.get("primary_topic") or "uncategorized")
             if topic_filter and topic_id != topic_filter:
                 continue
             available_counts[topic_id] = available_counts.get(topic_id, 0) + 1
@@ -293,7 +279,7 @@ def build_topic_candidates(
     topic_order: List[str] = []
     seen_topics: Set[str] = set()
     for article in sorted(all_articles, key=lambda item: score_sort_key(item, source_type_order)):
-        topic_id = str(article.get("topic") or "uncategorized")
+        topic_id = str(article.get("primary_topic") or "uncategorized")
         if topic_filter and topic_id != topic_filter:
             continue
         if topic_id in seen_topics:
@@ -418,7 +404,6 @@ def build_hotspots(
         for source_type, source_type_data in data.get("source_types", {}).items()
         if isinstance(source_type_data, dict)
     }
-    cross_source_match_index = build_cross_source_match_index(data)
     selected_source_breakdown: Dict[str, int] = {}
     displayed_total = 0
     effective_seen_titles = seen_titles or set()
@@ -430,7 +415,6 @@ def build_hotspots(
         effective_seen_titles,
         effective_seen_links,
     )
-
     for topic_id in ordered_topics:
         topic_source_candidates = topic_candidates.get(topic_id, {})
         selected_articles = select_topic_articles(topic_source_candidates, top_n)
@@ -442,7 +426,6 @@ def build_hotspots(
                 rank=index,
                 source_rank_index=source_rank_index,
                 selection_order=selection_order_index.get(article_key(article), index),
-                cross_source_match_index=cross_source_match_index,
             )
             for index, article in enumerate(display_articles, start=1)
         ]
