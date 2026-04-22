@@ -13,24 +13,21 @@
 
 ---
 
-## 执行分工
+## 核心原则
 
-**Subagent 子任务职责**：运行脚本并等待归档文件生成，不负责读取或翻译。
+**谁启动 pipeline，谁负责到底。**
 
-完成条件：
-- `<WORKSPACE>/archive/news-hotspots/<DATE>/json/<mode>*.json`
-- `<WORKSPACE>/archive/news-hotspots/<DATE>/markdown/<mode>*.md`
-- `<WORKSPACE>/archive/news-hotspots/<DATE>/meta/*.meta.json`
+无论是主会话还是 cron isolated session，执行 agent 都必须亲自完成"运行 pipeline → 等待完成 → 读取归档 → 翻译输出"全流程。
 
-**主会话职责**：将归档 Markdown 翻译为 `<LANGUAGE>` 并输出，结尾追加 AI 总结。
+**禁止**：spawn 子任务跑 pipeline 后就结束当前 session，指望别人来收尾。
 
 ---
 
-## 脚本执行
+## 执行流程（唯一路径）
 
-**长耗时任务（15-30 分钟），必须使用 subagent 子任务执行，超时设置 30 分钟以上。**
+### 第 1 步：运行 pipeline
 
-约束：同一机器不要并发运行多个热点任务。
+**同步执行**，在当前 session 中直接运行，等待脚本退出：
 
 ```bash
 uv run <SKILL_DIR>/scripts/run-pipeline.py \
@@ -46,21 +43,34 @@ uv run <SKILL_DIR>/scripts/run-pipeline.py \
 - `<MODE>`: `daily` 或 `weekly`
 - `<RSS_HOURS>`: daily 为 `48`，weekly 为 `168`
 
+⚠️ 此脚本耗时 15-30 分钟，**必须同步等待完成**。设置 exec timeout ≥ 1800 秒。
+
+约束：同一机器不要并发运行多个热点任务。
+
+### 第 2 步：定位归档文件
+
+pipeline 完成后，读取今天日期对应的归档 Markdown：
+
+```bash
+cat <WORKSPACE>/archive/news-hotspots/<DATE>/markdown/<mode>.md
+```
+
+`<DATE>` 以脚本实际产出的目录名为准。如果不确定，用 `ls <WORKSPACE>/archive/news-hotspots/` 找最新日期目录。
+
+### 第 3 步：翻译并输出报告
+
+按照下方"输出约束"将归档 Markdown 翻译为 `<LANGUAGE>`，**直接输出文本内容**，不输出文件路径。
+
+### 第 4 步：追加总结
+
+- daily: 结尾追加 `## 本日报告总结`
+- weekly: 结尾追加 `## 本周报告总结`
+
+AI 总结基于归档 Markdown 正文，概括热点归纳、主要主题和信号变化。
+
 ---
 
-## 归档路径
-
-- JSON: `<WORKSPACE>/archive/news-hotspots/<DATE>/json/<mode>.json`
-- Markdown: `<WORKSPACE>/archive/news-hotspots/<DATE>/markdown/<mode>.md`
-- Meta: `<WORKSPACE>/archive/news-hotspots/<DATE>/meta/*.meta.json`
-
-`<DATE>` 格式为 `YYYY-MM-DD`，以脚本实际产出为准。
-
----
-
-## 主会话输出约束
-
-**适用场景**：无论是 `run-pipeline.py` 还是 `merge-hotspots.py` 生成的归档 Markdown，主会话都必须遵循以下约束。
+## 输出约束
 
 ### 必须遵守
 
@@ -92,13 +102,6 @@ summary: mode:daily | total_articles:15 | rss:8 | twitter:4 | github:3 | generat
 1. ⭐9.4 | OpenAI 发布具备突破性推理能力的 GPT-5 - 新模型在多步推理任务中表现出显著提升 | OpenAI Blog | likes=120
 ```
 
-### 必须追加
-
-- daily: 结尾追加 `## 本日报告总结`
-- weekly: 结尾追加 `## 本周报告总结`
-
-AI 总结基于归档 Markdown 正文，概括热点归纳、主要主题和信号变化。
-
 ---
 
 ## 失败处理
@@ -114,7 +117,7 @@ uv run <SKILL_DIR>/scripts/source-health.py \
 
 ### 失败类型
 
-1. **完全失败**：没有 `merge-sources.json` → 用 subagent 重跑 `run-pipeline.py`
+1. **完全失败**：没有 `merge-sources.json` → 重新运行 `run-pipeline.py`
 
 2. **部分失败**：有 `merge-sources.json` 但没有 markdown → 运行：
    ```bash
@@ -127,3 +130,14 @@ uv run <SKILL_DIR>/scripts/source-health.py \
    ```
 
 3. **无法恢复**：向用户报告实际完成情况，**不能伪造完整热点结果**
+
+---
+
+## 完成定义
+
+**仅运行 pipeline 不算完成。** 只有完成以下全部步骤，任务才算完成：
+
+1. ✅ pipeline 脚本运行完毕（exit code 0）
+2. ✅ 读取了归档 Markdown 文件
+3. ✅ 翻译并输出了完整报告
+4. ✅ 追加了报告总结
